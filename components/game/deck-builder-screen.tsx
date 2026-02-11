@@ -400,6 +400,7 @@ export default function DeckBuilderScreen({ onBack }: DeckBuilderScreenProps) {
                 <SelectItem value="magic">{t("magic")}</SelectItem>
                 <SelectItem value="action">{t("action")}</SelectItem>
                 <SelectItem value="ultimateGear">{t("ultimateGear")}</SelectItem>
+                <SelectItem value="ultimateGuardian">{t("ultimateGuardian")}</SelectItem>
                 <SelectItem value="item">{t("item")}</SelectItem>
               </SelectContent>
             </Select>

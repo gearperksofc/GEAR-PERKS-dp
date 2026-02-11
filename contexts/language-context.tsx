@@ -42,6 +42,7 @@ const translations: Translations = {
   magic: { pt: "Magia", en: "Magic", ja: "魔法" },
   action: { pt: "Action", en: "Action", ja: "アクション" },
   ultimateGear: { pt: "Ultimate Gear", en: "Ultimate Gear", ja: "アルティメットギア" },
+  ultimateGuardian: { pt: "Ultimate Guardian", en: "Ultimate Guardian", ja: "アルティメットガーディアン" },
   item: { pt: "Item", en: "Item", ja: "アイテム" },
 
   // Deck Builder
