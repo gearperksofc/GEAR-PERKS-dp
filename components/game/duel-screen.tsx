@@ -1258,6 +1258,7 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
 
   // Ultimate Gear effect tracking
   const [playerUgAbilityUsed, setPlayerUgAbilityUsed] = useState(false) // One-time ability used (ODEN SWORD, TWILIGH AVALON)
+  const [showUgActivateBtn, setShowUgActivateBtn] = useState(false) // Toggle blue "Ativar efeito" button on UG card click
   const [enemyUgAbilityUsed, setEnemyUgAbilityUsed] = useState(false)
   const [ugTargetMode, setUgTargetMode] = useState<{
     active: boolean
@@ -3081,6 +3082,7 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
         return
       }
       setUgTargetMode({ active: true, ugCard: ug, type: "oden_sword" })
+      setShowUgActivateBtn(false)
       showEffectFeedback("Selecione uma Function inimiga para destruir!", "success")
     } else if (ug.ability === "TWILIGH AVALON") {
       // Check if opponent has any cards on field (units or functions)
@@ -3090,6 +3092,7 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
         return
       }
       setUgTargetMode({ active: true, ugCard: ug, type: "twiligh_avalon" })
+      setShowUgActivateBtn(false)
       showEffectFeedback("Selecione uma carta inimiga para devolver a mao!", "success")
     } else if (ug.ability === "KENSEI IFRAID") {
       // Destroy any 1 enemy card; if unit, deal 4 DP damage to LP
@@ -3099,7 +3102,8 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
         return
       }
       setUgTargetMode({ active: true, ugCard: ug, type: "kensei_ifraid" })
-      showEffectFeedback("KENSEI IFRAID: Selecione uma carta inimiga para destruir!", "success")
+      setShowUgActivateBtn(false)
+      showEffectFeedback("Selecione uma carta do oponente", "success")
     } else if (ug.ability === "MEFISTO FOLES") {
       // Destroy any 1 enemy card
       const hasEnemyCards = enemyField.unitZone.some((u) => u !== null) || enemyField.functionZone.some((f) => f !== null)
@@ -3108,7 +3112,8 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
         return
       }
       setUgTargetMode({ active: true, ugCard: ug, type: "mefisto_foles" })
-      showEffectFeedback("MEFISTO FOLES: Selecione uma carta inimiga para destruir!", "success")
+      setShowUgActivateBtn(false)
+      showEffectFeedback("Selecione uma carta do oponente", "success")
     } else if (ug.ability === "NIGHTMARE ARMAGEDDON") {
       // Destroy 1 enemy unit with 3 DP or less
       const hasWeakUnits = enemyField.unitZone.some((u) => u !== null && u.currentDp <= 3)
@@ -3117,7 +3122,8 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
         return
       }
       setUgTargetMode({ active: true, ugCard: ug, type: "nightmare_armageddon" })
-      showEffectFeedback("NIGHTMARE ARMAGEDDON: Selecione uma unidade com 3 DP ou menos!", "success")
+      setShowUgActivateBtn(false)
+      showEffectFeedback("Selecione uma carta do oponente (unidade com 3 DP ou menos)", "success")
     }
   }
 
@@ -3289,6 +3295,7 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
   // Cancel UG target mode
   const cancelUgTargetMode = () => {
     setUgTargetMode({ active: false, ugCard: null, type: null })
+    setShowUgActivateBtn(false)
   }
 
   const advancePhase = () => {
@@ -4947,7 +4954,18 @@ const handleAllyUnitSelect = (index: number) => {
                           src={playerField.ultimateZone.image || "/placeholder.svg"}
                           alt={playerField.ultimateZone.name}
                           fill
-                          className="object-cover rounded"
+                          className="object-cover rounded cursor-pointer"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            // Toggle the blue "Ativar efeito" button on click
+                            if (isPlayerTurn && phase === "main" && !playerUgAbilityUsed && !ugTargetMode.active &&
+                              ["ODEN SWORD", "TWILIGH AVALON", "KENSEI IFRAID", "MEFISTO FOLES", "NIGHTMARE ARMAGEDDON"].includes(playerField.ultimateZone?.ability || "") &&
+                              ((playerField.ultimateZone?.requiresUnit && findUnitByName(playerField.unitZone, playerField.ultimateZone.requiresUnit) !== -1) ||
+                               (!playerField.ultimateZone?.requiresUnit && playerField.ultimateZone?.ability === "ISGRIMM FENRIR"))
+                            ) {
+                              setShowUgActivateBtn((prev) => !prev)
+                            }
+                          }}
                           onMouseDown={() => handleCardPressStart(playerField.ultimateZone!)}
                           onMouseUp={handleCardPressEnd}
                           onMouseLeave={handleCardPressEnd}
@@ -4957,16 +4975,14 @@ const handleAllyUnitSelect = (index: number) => {
                         <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-center text-xs text-white font-bold py-0.5">
                           {playerField.ultimateZone.currentDp} DP
                         </div>
-                        {/* Activate button for one-time abilities */}
-                        {isPlayerTurn && phase === "main" && !playerUgAbilityUsed && !ugTargetMode.active &&
-                          ["ODEN SWORD", "TWILIGH AVALON", "KENSEI IFRAID", "MEFISTO FOLES", "NIGHTMARE ARMAGEDDON"].includes(playerField.ultimateZone.ability || "") &&
-                          playerField.ultimateZone.requiresUnit &&
-                          findUnitByName(playerField.unitZone, playerField.ultimateZone.requiresUnit) !== -1 && (
+                        {/* Blue "Ativar efeito" button - toggled by clicking the UG card */}
+                        {showUgActivateBtn && isPlayerTurn && phase === "main" && !playerUgAbilityUsed && !ugTargetMode.active &&
+                          ["ODEN SWORD", "TWILIGH AVALON", "KENSEI IFRAID", "MEFISTO FOLES", "NIGHTMARE ARMAGEDDON"].includes(playerField.ultimateZone.ability || "") && (
                           <button
                             onClick={(e) => { e.stopPropagation(); activateUgAbility() }}
-                            className="absolute -top-5 left-1/2 -translate-x-1/2 bg-yellow-500 hover:bg-yellow-400 text-black text-[7px] font-bold px-1.5 py-0.5 rounded shadow-lg shadow-yellow-500/50 animate-pulse whitespace-nowrap z-10"
+                            className="absolute -top-6 left-1/2 -translate-x-1/2 bg-blue-600 hover:bg-blue-500 text-white text-[7px] font-bold px-2 py-1 rounded shadow-lg shadow-blue-500/50 whitespace-nowrap z-10 border border-blue-400/50"
                           >
-                            ATIVAR
+                            Ativar efeito
                           </button>
                         )}
                       </>
@@ -5524,10 +5540,10 @@ const handleAllyUnitSelect = (index: number) => {
             </h3>
             <p className="text-yellow-200/80 text-xs mb-2">
               {ugTargetMode.type === "oden_sword" ? "Selecione uma Function inimiga para destruir"
-                : ugTargetMode.type === "twiligh_avalon" ? "Selecione uma carta inimiga para devolver a mao"
-                : ugTargetMode.type === "kensei_ifraid" ? "Selecione uma carta inimiga para destruir (unidade = -4 LP)"
-                : ugTargetMode.type === "mefisto_foles" ? "Selecione uma carta inimiga para destruir"
-                : ugTargetMode.type === "nightmare_armageddon" ? "Selecione uma unidade com 3 DP ou menos"
+                : ugTargetMode.type === "twiligh_avalon" ? "Selecione uma carta do oponente para devolver a mao"
+                : ugTargetMode.type === "kensei_ifraid" ? "Selecione uma carta do oponente"
+                : ugTargetMode.type === "mefisto_foles" ? "Selecione uma carta do oponente"
+                : ugTargetMode.type === "nightmare_armageddon" ? "Selecione uma carta do oponente (unidade com 3 DP ou menos)"
                 : "Selecione um alvo"}
             </p>
             <button
