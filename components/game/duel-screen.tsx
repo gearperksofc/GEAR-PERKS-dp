@@ -1263,9 +1263,16 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
   const [ugTargetMode, setUgTargetMode] = useState<{
     active: boolean
     ugCard: GameCard | null
-    type: "oden_sword" | "twiligh_avalon" | "kensei_ifraid" | "mefisto_foles" | "nightmare_armageddon" | null
+    type: "oden_sword" | "twiligh_avalon" | "kensei_ifraid" | "mefisto_foles" | "nightmare_armageddon" | "vatnavordr_messiham" | "yggdra_nidhogg" | null
   }>({ active: false, ugCard: null, type: null })
   const [fornbrennaFireCount, setFornbrennaFireCount] = useState(0) // Snapshot of fire units used when Fornbrenna is placed
+  // Freeze state for VATNAVORDR MESSIHAM: tracks frozen cards on the enemy field
+  const [frozenCards, setFrozenCards] = useState<{ type: "unit" | "function"; index: number; turnsLeft: number }[]>([])
+  // RAGNA GULLINKAMBI: omen marker counters
+  const [ragnaOmenMarkers, setRagnaOmenMarkers] = useState(0)
+  // SKUGGI DRAUGR: graveyard selection mode (once per turn)
+  const [skuggiUsedThisTurn, setSkuggiUsedThisTurn] = useState(false)
+  const [skuggiSelectMode, setSkuggiSelectMode] = useState(false)
 
   // Track last known unit zone state to detect when a matching unit is placed after UG
   const prevUnitZoneRef = useRef<(string | null)[]>([])
@@ -1281,18 +1288,23 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
     const prevNames = prevUnitZoneRef.current
     const currentNames = playerField.unitZone.map((u) => u?.name || null)
 
-    // ISGRIMM FENRIR: element-based equip (any Ventus unit)
-    if (ability === "ISGRIMM FENRIR" && !requiredUnit) {
-      // Check if a new Ventus unit just appeared
+    // Element-based equips: check if a new unit of the matching element appeared
+    const elementEquips: Record<string, { element: string; bonus: number }> = {
+      "ISGRIMM FENRIR": { element: "Ventus", bonus: 2 },
+      "RAGNA GULLINKAMBI": { element: "Haos", bonus: 3 },
+      "SKUGGI DRAUGR": { element: "Darkus", bonus: 3 },
+    }
+    const elemConfig = ability ? elementEquips[ability] : undefined
+    if (elemConfig && !requiredUnit) {
       for (let i = 0; i < playerField.unitZone.length; i++) {
         const unit = playerField.unitZone[i]
-        if (unit && unit.element === "Ventus" && !prevNames.includes(unit.name)) {
+        if (unit && unit.element === elemConfig.element && !prevNames.includes(unit.name)) {
           setPlayerField((prev) => {
             const newUnits = [...prev.unitZone]
             const u = newUnits[i]
-            if (!u || u.element !== "Ventus") return prev
-            newUnits[i] = { ...u, currentDp: u.currentDp + 2 }
-            showEffectFeedback(`${u.name} +2 DP (Isgrimm Fenrir)!`, "success")
+            if (!u || u.element !== elemConfig.element) return prev
+            newUnits[i] = { ...u, currentDp: u.currentDp + elemConfig.bonus }
+            showEffectFeedback(`${u.name} +${elemConfig.bonus} DP (${ability})!`, "success")
             return { ...prev, unitZone: newUnits as (FieldCard | null)[] }
           })
           break
@@ -1329,6 +1341,8 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
           else if (ability === "KENSEI IFRAID") { bonus = 3; msg = `${requiredUnit} +3 DP (Kensei Ifraid)!` }
           else if (ability === "MEFISTO FOLES") { bonus = 2; msg = `${requiredUnit} +2 DP (Mefisto Foles)!` }
           else if (ability === "NIGHTMARE ARMAGEDDON") { bonus = 7; msg = `${requiredUnit} +7 DP (Nightmare Armageddon)!` }
+          else if (ability === "VATNAVORDR MESSIHAM") { bonus = 2; msg = `${requiredUnit} +2 DP (Vatnavordr Messiham)!` }
+          else if (ability === "YGGDRA NIDHOGG") { bonus = 3; msg = `${requiredUnit} +3 DP (Yggdra Nidhogg)!` }
           else if (ability === "FORNBRENNA") {
             const fireCount = countFireUnitsUsed(prev)
             bonus = fireCount * 2
@@ -3022,16 +3036,39 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
         } else if (ability === "NIGHTMARE ARMAGEDDON") {
           newUnitZone[unitIdx] = { ...unit, currentDp: unit.currentDp + 7 }
           bonusMsg = `${requiredUnit} +7 DP (Nightmare Armageddon)!`
+        } else if (ability === "VATNAVORDR MESSIHAM") {
+          newUnitZone[unitIdx] = { ...unit, currentDp: unit.currentDp + 2 }
+          bonusMsg = `${requiredUnit} +2 DP (Vatnavordr Messiham)!`
+        } else if (ability === "YGGDRA NIDHOGG") {
+          newUnitZone[unitIdx] = { ...unit, currentDp: unit.currentDp + 3 }
+          bonusMsg = `${requiredUnit} +3 DP (Yggdra Nidhogg)!`
         }
       }
 
-      // ISGRIMM FENRIR: element-based equip (any Ventus unit)
-      if (!requiredUnit && cardToPlace.ability === "ISGRIMM FENRIR") {
-        const ventusIdx = newUnitZone.findIndex((u) => u !== null && u.element === "Ventus")
-        if (ventusIdx !== -1) {
-          const unit = newUnitZone[ventusIdx]!
-          newUnitZone[ventusIdx] = { ...unit, currentDp: unit.currentDp + 2 }
-          bonusMsg = `${unit.name} +2 DP (Isgrimm Fenrir)!`
+      // Element-based equips (no requiresUnit)
+      if (!requiredUnit) {
+        if (cardToPlace.ability === "ISGRIMM FENRIR") {
+          const idx = newUnitZone.findIndex((u) => u !== null && u.element === "Ventus")
+          if (idx !== -1) {
+            const unit = newUnitZone[idx]!
+            newUnitZone[idx] = { ...unit, currentDp: unit.currentDp + 2 }
+            bonusMsg = `${unit.name} +2 DP (Isgrimm Fenrir)!`
+          }
+        } else if (cardToPlace.ability === "RAGNA GULLINKAMBI") {
+          const idx = newUnitZone.findIndex((u) => u !== null && u.element === "Haos")
+          if (idx !== -1) {
+            const unit = newUnitZone[idx]!
+            newUnitZone[idx] = { ...unit, currentDp: unit.currentDp + 3 }
+            bonusMsg = `${unit.name} +3 DP (Ragna Gullinkambi)!`
+          }
+          setRagnaOmenMarkers(0) // Reset omen markers
+        } else if (cardToPlace.ability === "SKUGGI DRAUGR") {
+          const idx = newUnitZone.findIndex((u) => u !== null && u.element === "Darkus")
+          if (idx !== -1) {
+            const unit = newUnitZone[idx]!
+            newUnitZone[idx] = { ...unit, currentDp: unit.currentDp + 3 }
+            bonusMsg = `${unit.name} +3 DP (Skuggi Draugr)!`
+          }
         }
       }
 
@@ -3039,8 +3076,9 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
         setTimeout(() => showEffectFeedback(bonusMsg, "success"), 300)
       } else if (requiredUnit && !unitFound) {
         setTimeout(() => showEffectFeedback(`${cardToPlace.name} equipada! Coloque ${requiredUnit} no campo para ativar.`, "success"), 300)
-      } else if (!requiredUnit && cardToPlace.ability === "ISGRIMM FENRIR") {
-        setTimeout(() => showEffectFeedback(`${cardToPlace.name} equipada! Coloque uma unidade Ventus no campo para ativar.`, "success"), 300)
+      } else if (!requiredUnit && ["ISGRIMM FENRIR", "RAGNA GULLINKAMBI", "SKUGGI DRAUGR"].includes(cardToPlace.ability || "")) {
+        const elementNeeded = cardToPlace.ability === "ISGRIMM FENRIR" ? "Ventus" : cardToPlace.ability === "RAGNA GULLINKAMBI" ? "Lightness" : "Darkness"
+        setTimeout(() => showEffectFeedback(`${cardToPlace.name} equipada! Coloque uma unidade ${elementNeeded} no campo para ativar.`, "success"), 300)
       }
 
       return {
@@ -3064,6 +3102,22 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
     if (!playerField.ultimateZone) return
 
     const ug = playerField.ultimateZone
+
+    // SKUGGI DRAUGR: once per turn, select a card from graveyard
+    if (ug.ability === "SKUGGI DRAUGR") {
+      if (skuggiUsedThisTurn) {
+        showEffectFeedback("Skuggi Draugr ja foi usado neste turno!", "error")
+        return
+      }
+      if (playerField.graveyard.length === 0) {
+        showEffectFeedback("Nenhuma carta no cemiterio!", "error")
+        return
+      }
+      setSkuggiSelectMode(true)
+      setShowUgActivateBtn(false)
+      return
+    }
+
     const requiredUnit = ug.requiresUnit
     if (!requiredUnit) return
 
@@ -3071,6 +3125,30 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
     const unitIdx = findUnitByName(playerField.unitZone, requiredUnit)
     if (unitIdx === -1) {
       showEffectFeedback(`${requiredUnit} precisa estar no campo!`, "error")
+      return
+    }
+
+    if (ug.ability === "VATNAVORDR MESSIHAM") {
+      const hasEnemyCards = enemyField.unitZone.some((u) => u !== null) || enemyField.functionZone.some((f) => f !== null)
+      if (!hasEnemyCards) {
+        showEffectFeedback("Oponente nao tem cartas no campo!", "error")
+        return
+      }
+      setUgTargetMode({ active: true, ugCard: ug, type: "vatnavordr_messiham" })
+      setShowUgActivateBtn(false)
+      showEffectFeedback("Selecione uma carta do oponente para congelar!", "success")
+      return
+    }
+
+    if (ug.ability === "YGGDRA NIDHOGG") {
+      const hasEnemyFunctions = enemyField.functionZone.some((f) => f !== null)
+      if (!hasEnemyFunctions) {
+        showEffectFeedback("Oponente nao tem cartas de Function no campo!", "error")
+        return
+      }
+      setUgTargetMode({ active: true, ugCard: ug, type: "yggdra_nidhogg" })
+      setShowUgActivateBtn(false)
+      showEffectFeedback("Selecione uma Function inimiga para destruir!", "success")
       return
     }
 
@@ -3292,10 +3370,54 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
     setUgTargetMode({ active: false, ugCard: null, type: null })
   }
 
+  // Handle VATNAVORDR MESSIHAM target (freeze enemy card, if unit deal 2 LP)
+  const handleVatnavordrTarget = (type: "unit" | "function", index: number) => {
+    if (!ugTargetMode.active || ugTargetMode.type !== "vatnavordr_messiham") return
+
+    if (type === "unit") {
+      const unit = enemyField.unitZone[index]
+      if (!unit) return
+      // Freeze the unit (can't attack or activate) + deal 2 LP damage
+      setFrozenCards((prev) => [...prev, { type: "unit", index, turnsLeft: 2 }])
+      setEnemyField((prev) => ({
+        ...prev,
+        life: Math.max(0, prev.life - 2),
+      }))
+      showEffectFeedback(`VATNAVORDR MESSIHAM: ${unit.name} congelada! -2 LP!`, "success")
+    } else {
+      const func = enemyField.functionZone[index]
+      if (!func) return
+      // Freeze the function (can't be activated)
+      setFrozenCards((prev) => [...prev, { type: "function", index, turnsLeft: 2 }])
+      showEffectFeedback(`VATNAVORDR MESSIHAM: ${func.name} congelada!`, "success")
+    }
+    setPlayerUgAbilityUsed(true)
+    setUgTargetMode({ active: false, ugCard: null, type: null })
+  }
+
+  // Handle YGGDRA NIDHOGG target (destroy 1 enemy function card)
+  const handleYggdraNidhoggTarget = (index: number) => {
+    if (!ugTargetMode.active || ugTargetMode.type !== "yggdra_nidhogg") return
+    const func = enemyField.functionZone[index]
+    if (!func) return
+    setEnemyField((prev) => {
+      const newFuncs = [...prev.functionZone]
+      const destroyed = newFuncs[index]
+      newFuncs[index] = null
+      return {
+        ...prev,
+        functionZone: newFuncs,
+        graveyard: destroyed ? [...prev.graveyard, destroyed] : prev.graveyard,
+      }
+    })
+    showEffectFeedback(`YGGDRA NIDHOGG: ${func.name} destruida!`, "success")
+    setPlayerUgAbilityUsed(true)
+    setUgTargetMode({ active: false, ugCard: null, type: null })
+  }
+
   // Cancel UG target mode
   const cancelUgTargetMode = () => {
     setUgTargetMode({ active: false, ugCard: null, type: null })
-    setShowUgActivateBtn(false)
   }
 
   const advancePhase = () => {
@@ -3765,6 +3887,10 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
                 else if (card.ability === "MEFISTO FOLES") bonus = 2
                 else if (card.ability === "NIGHTMARE ARMAGEDDON") bonus = 7
                 else if (card.ability === "ISGRIMM FENRIR") bonus = 2
+                else if (card.ability === "VATNAVORDR MESSIHAM") bonus = 2
+                else if (card.ability === "YGGDRA NIDHOGG") bonus = 3
+                else if (card.ability === "RAGNA GULLINKAMBI") bonus = 3
+                else if (card.ability === "SKUGGI DRAUGR") bonus = 3
                 else if (card.ability === "FORNBRENNA") {
                   // Count fire units in enemy graveyard
                   const fireCount = prev.graveyard.filter((c) => c.element === "Pyrus" && (c.type === "unit")).length
@@ -3773,6 +3899,20 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
                 // ULLRBOGI: no immediate bonus, only during battle
                 if (bonus > 0) {
                   newUnitZone[matchIdx] = { ...unit, currentDp: unit.currentDp + bonus }
+                }
+              }
+            } else {
+              // Element-based equips (no requiresUnit)
+              const elemBonuses: Record<string, { element: string; bonus: number }> = {
+                "ISGRIMM FENRIR": { element: "Ventus", bonus: 2 },
+                "RAGNA GULLINKAMBI": { element: "Haos", bonus: 3 },
+                "SKUGGI DRAUGR": { element: "Darkus", bonus: 3 },
+              }
+              const cfg = card.ability ? elemBonuses[card.ability] : undefined
+              if (cfg) {
+                const eIdx = newUnitZone.findIndex((u) => u && u.element === cfg.element)
+                if (eIdx !== -1 && newUnitZone[eIdx]) {
+                  newUnitZone[eIdx] = { ...newUnitZone[eIdx]!, currentDp: newUnitZone[eIdx]!.currentDp + cfg.bonus }
                 }
               }
             }
@@ -3942,6 +4082,38 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
               setEnemyUgAbilityUsed(true)
               showEffectFeedback(`Bot NIGHTMARE ARMAGEDDON: ${unit?.name} destruida!`, "error")
             }
+          } else if (ug.ability === "VATNAVORDR MESSIHAM") {
+            // Freeze strongest player unit and deal 2 LP
+            const bestIdx = playerField.unitZone.reduce((best, u, idx) => {
+              if (!u) return best
+              if (best === -1) return idx
+              return u.currentDp > (playerField.unitZone[best] as FieldCard).currentDp ? idx : best
+            }, -1)
+            if (bestIdx !== -1) {
+              const unit = playerField.unitZone[bestIdx]
+              // Note: bot freeze affects player's units - but freeze state tracks enemy cards only
+              // For simplicity, we just deal the 2 LP damage
+              setPlayerField((prev) => ({
+                ...prev,
+                life: Math.max(0, prev.life - 2),
+              }))
+              setEnemyUgAbilityUsed(true)
+              showEffectFeedback(`Bot VATNAVORDR MESSIHAM: ${unit?.name} congelada! -2 LP!`, "error")
+            }
+          } else if (ug.ability === "YGGDRA NIDHOGG") {
+            // Destroy a player function card
+            const funcIdx = playerField.functionZone.findIndex((f) => f !== null)
+            if (funcIdx !== -1) {
+              const func = playerField.functionZone[funcIdx]
+              setPlayerField((prev) => {
+                const newFuncs = [...prev.functionZone]
+                const destroyed = newFuncs[funcIdx]
+                newFuncs[funcIdx] = null
+                return { ...prev, functionZone: newFuncs, graveyard: destroyed ? [...prev.graveyard, destroyed] : prev.graveyard }
+              })
+              setEnemyUgAbilityUsed(true)
+              showEffectFeedback(`Bot YGGDRA NIDHOGG: ${func?.name} destruida!`, "error")
+            }
           }
           return prevEnemy
         })
@@ -4034,6 +4206,49 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
           setPhase("draw")
           setIsPlayerTurn(true)
 
+          // Reset Skuggi Draugr once-per-turn usage
+          setSkuggiUsedThisTurn(false)
+
+          // RAGNA GULLINKAMBI: add omen marker at start of player turn + draw extra cards
+          setRagnaOmenMarkers((prevMarkers) => {
+            const newMarkers = prevMarkers + 1
+            if (playerField.ultimateZone?.ability === "RAGNA GULLINKAMBI" &&
+                playerField.unitZone.some((u) => u !== null && u.element === "Haos")) {
+              if (newMarkers >= 5) {
+                // Destroy all enemy cards on field
+                setEnemyField((prev) => {
+                  const destroyedUnits = prev.unitZone.filter((u) => u !== null) as FieldCard[]
+                  const destroyedFuncs = prev.functionZone.filter((f) => f !== null) as FieldCard[]
+                  return {
+                    ...prev,
+                    unitZone: [null, null, null, null, null] as (FieldCard | null)[],
+                    functionZone: [null, null, null, null, null],
+                    graveyard: [...prev.graveyard, ...destroyedUnits, ...destroyedFuncs],
+                  }
+                })
+                showEffectFeedback(`RAGNA GULLINKAMBI: 5 Marcadores! Todas as cartas inimigas destruidas!`, "success")
+                // Draw 5 cards (one per marker)
+                setPlayerField((prev) => {
+                  const drawn = prev.deck.slice(0, 5)
+                  return { ...prev, hand: [...prev.hand, ...drawn], deck: prev.deck.slice(5) }
+                })
+                return 0 // Reset markers
+              } else {
+                // Draw cards equal to new marker count
+                setPlayerField((prev) => {
+                  const drawn = prev.deck.slice(0, newMarkers)
+                  return { ...prev, hand: [...prev.hand, ...drawn], deck: prev.deck.slice(newMarkers) }
+                })
+                showEffectFeedback(`RAGNA GULLINKAMBI: ${newMarkers} Marcador(es) de Pressagio! +${newMarkers} carta(s)!`, "success")
+                return newMarkers
+              }
+            }
+            return prevMarkers // Don't change if Ragna is not active
+          })
+
+          // Tick down frozen cards
+          setFrozenCards((prev) => prev.map((f) => ({ ...f, turnsLeft: f.turnsLeft - 1 })).filter((f) => f.turnsLeft > 0))
+
           // Reset attack status and enable attacking for units that can now attack
           setPlayerField((prev) => ({
             ...prev,
@@ -4059,6 +4274,7 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
 
   const endTurn = () => {
     setPhase("end")
+    setSkuggiUsedThisTurn(false) // Reset for next turn
 
     setPlayerField((prev) => ({
       ...prev,
@@ -4659,7 +4875,8 @@ const handleAllyUnitSelect = (index: number) => {
                   {enemyField.functionZone.map((card, i) => {
                     const isUgTarget = ugTargetMode.active && card && (
                       ugTargetMode.type === "oden_sword" || ugTargetMode.type === "twiligh_avalon" ||
-                      ugTargetMode.type === "kensei_ifraid" || ugTargetMode.type === "mefisto_foles"
+                      ugTargetMode.type === "kensei_ifraid" || ugTargetMode.type === "mefisto_foles" ||
+                      ugTargetMode.type === "vatnavordr_messiham" || ugTargetMode.type === "yggdra_nidhogg"
                     )
                     return (
                       <div
@@ -4670,6 +4887,8 @@ const handleAllyUnitSelect = (index: number) => {
                           else if (ugTargetMode.type === "twiligh_avalon") handleUgTargetEnemyCard("function", i)
                           else if (ugTargetMode.type === "kensei_ifraid") handleKenseiIfraidTarget("function", i)
                           else if (ugTargetMode.type === "mefisto_foles") handleMefistoFolesTarget("function", i)
+                          else if (ugTargetMode.type === "vatnavordr_messiham") handleVatnavordrTarget("function", i)
+                          else if (ugTargetMode.type === "yggdra_nidhogg") handleYggdraNidhoggTarget(i)
                         }}
                         className={`w-14 h-20 bg-purple-900/40 border-2 rounded flex items-center justify-center relative overflow-hidden transition-all ${
                           isUgTarget
@@ -4702,12 +4921,13 @@ const handleAllyUnitSelect = (index: number) => {
                         else if (ugTargetMode.type === "kensei_ifraid") handleKenseiIfraidTarget("unit", i)
                         else if (ugTargetMode.type === "mefisto_foles") handleMefistoFolesTarget("unit", i)
                         else if (ugTargetMode.type === "nightmare_armageddon") handleNightmareArmageddonTarget(i)
+                        else if (ugTargetMode.type === "vatnavordr_messiham") handleVatnavordrTarget("unit", i)
                       } else if (itemSelectionMode.active && itemSelectionMode.step === "selectEnemy") {
                         handleEnemyUnitSelect(i)
                       }
                     }}
                     className={`w-14 h-20 bg-red-900/30 border-2 rounded relative overflow-hidden transition-all ${
-                      ugTargetMode.active && card && ["twiligh_avalon", "kensei_ifraid", "mefisto_foles", "nightmare_armageddon"].includes(ugTargetMode.type || "")
+                      ugTargetMode.active && card && ["twiligh_avalon", "kensei_ifraid", "mefisto_foles", "nightmare_armageddon", "vatnavordr_messiham"].includes(ugTargetMode.type || "")
                         ? "border-yellow-400 cursor-pointer hover:bg-yellow-900/30 ring-2 ring-yellow-400/50 animate-pulse"
                         : attackTarget?.type === "unit" && attackTarget.index === i
                           ? "border-red-500 ring-2 ring-red-400 scale-105"
@@ -4732,6 +4952,12 @@ const handleAllyUnitSelect = (index: number) => {
                         <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-center text-xs text-white font-bold py-0.5">
                           {(card as FieldCard).currentDp} DP
                         </div>
+                        {/* Frozen indicator */}
+                        {frozenCards.some((f) => f.type === "unit" && f.index === i) && (
+                          <div className="absolute inset-0 bg-cyan-400/30 flex items-center justify-center pointer-events-none">
+                            <span className="text-cyan-200 text-[8px] font-bold bg-cyan-900/80 px-1 rounded">FROZEN</span>
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
@@ -4958,10 +5184,16 @@ const handleAllyUnitSelect = (index: number) => {
                           onClick={(e) => {
                             e.stopPropagation()
                             // Toggle the blue "Ativar efeito" button on click
-                            if (isPlayerTurn && phase === "main" && !playerUgAbilityUsed && !ugTargetMode.active &&
-                              ["ODEN SWORD", "TWILIGH AVALON", "KENSEI IFRAID", "MEFISTO FOLES", "NIGHTMARE ARMAGEDDON"].includes(playerField.ultimateZone?.ability || "") &&
+                            const ugAbilitiesWithActivate = ["ODEN SWORD", "TWILIGH AVALON", "KENSEI IFRAID", "MEFISTO FOLES", "NIGHTMARE ARMAGEDDON", "VATNAVORDR MESSIHAM", "YGGDRA NIDHOGG"]
+                            const canActivateUg = isPlayerTurn && phase === "main" && !playerUgAbilityUsed && !ugTargetMode.active &&
+                              ugAbilitiesWithActivate.includes(playerField.ultimateZone?.ability || "") &&
                               playerField.ultimateZone?.requiresUnit && findUnitByName(playerField.unitZone, playerField.ultimateZone.requiresUnit) !== -1
-                            ) {
+                            // Also allow Skuggi Draugr activation (once per turn)
+                            const canActivateSkuggi = isPlayerTurn && phase === "main" && !skuggiUsedThisTurn && !ugTargetMode.active &&
+                              playerField.ultimateZone?.ability === "SKUGGI DRAUGR" &&
+                              playerField.graveyard.length > 0 &&
+                              playerField.unitZone.some((u) => u !== null && u.element === "Darkus")
+                            if (canActivateUg || canActivateSkuggi) {
                               setShowUgActivateBtn((prev) => !prev)
                             }
                           }}
@@ -4975,8 +5207,10 @@ const handleAllyUnitSelect = (index: number) => {
                           {playerField.ultimateZone.currentDp} DP
                         </div>
                         {/* Blue "Ativar efeito" button - toggled by clicking the UG card */}
-                        {showUgActivateBtn && isPlayerTurn && phase === "main" && !playerUgAbilityUsed && !ugTargetMode.active &&
-                          ["ODEN SWORD", "TWILIGH AVALON", "KENSEI IFRAID", "MEFISTO FOLES", "NIGHTMARE ARMAGEDDON"].includes(playerField.ultimateZone.ability || "") && (
+                        {showUgActivateBtn && isPlayerTurn && phase === "main" && !ugTargetMode.active && (
+                          (["ODEN SWORD", "TWILIGH AVALON", "KENSEI IFRAID", "MEFISTO FOLES", "NIGHTMARE ARMAGEDDON", "VATNAVORDR MESSIHAM", "YGGDRA NIDHOGG"].includes(playerField.ultimateZone.ability || "") && !playerUgAbilityUsed) ||
+                          (playerField.ultimateZone.ability === "SKUGGI DRAUGR" && !skuggiUsedThisTurn && playerField.graveyard.length > 0)
+                        ) && (
                           <button
                             onClick={(e) => { e.stopPropagation(); activateUgAbility() }}
                             className="absolute -top-6 left-1/2 -translate-x-1/2 bg-blue-600 hover:bg-blue-500 text-white text-[7px] font-bold px-2 py-1 rounded shadow-lg shadow-blue-500/50 whitespace-nowrap z-10 border border-blue-400/50"
@@ -5139,6 +5373,82 @@ const handleAllyUnitSelect = (index: number) => {
           </div>
         </div>
       </div>
+
+      {/* SKUGGI DRAUGR: graveyard selection modal */}
+      {skuggiSelectMode && (
+        <div 
+          className="fixed inset-0 z-[95] flex items-center justify-center bg-black/85"
+          onClick={() => setSkuggiSelectMode(false)}
+        >
+          <div 
+            className="relative bg-gradient-to-b from-slate-800 to-slate-900 rounded-2xl border-2 border-purple-500/50 p-6 max-w-md w-full mx-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-purple-400 font-bold text-xl mb-2 text-center">SKUGGI DRAUGR</h3>
+            <p className="text-purple-200/80 text-xs text-center mb-4">Selecione uma carta do cemiterio para colocar no topo do deck</p>
+            <div className="max-h-80 overflow-y-auto">
+              {playerField.graveyard.length === 0 ? (
+                <p className="text-gray-400 text-center py-8">Nenhuma carta no cemiterio</p>
+              ) : (
+                <div className="grid grid-cols-4 gap-2">
+                  {playerField.graveyard.map((card, i) => (
+                    <div 
+                      key={i}
+                      className="relative w-16 rounded-lg border-2 border-purple-500/50 overflow-hidden bg-slate-800 cursor-pointer hover:border-green-400 hover:scale-105 transition-all"
+                      style={{ height: '88px' }}
+                      onClick={() => {
+                        // Move card from graveyard to top of deck
+                        setPlayerField((prev) => {
+                          const newGraveyard = [...prev.graveyard]
+                          const [selected] = newGraveyard.splice(i, 1)
+                          return {
+                            ...prev,
+                            graveyard: newGraveyard,
+                            deck: [selected, ...prev.deck],
+                          }
+                        })
+                        setSkuggiUsedThisTurn(true)
+                        setSkuggiSelectMode(false)
+                        showEffectFeedback(`SKUGGI DRAUGR: ${card.name} adicionada ao topo do deck!`, "success")
+                      }}
+                    >
+                      <img
+                        src={card.image || "/placeholder.svg"}
+                        alt={card.name}
+                        className="w-full h-full object-contain"
+                      />
+                      {isUnitCard(card) && (
+                        <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-white text-[8px] text-center py-0.5">
+                          {card.dp} DP
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => setSkuggiSelectMode(false)}
+              className="mt-4 w-full bg-red-600 hover:bg-red-500 text-white text-sm font-bold py-2 rounded-lg"
+            >
+              CANCELAR
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Ragna Gullinkambi omen marker display */}
+      {playerField.ultimateZone?.ability === "RAGNA GULLINKAMBI" && ragnaOmenMarkers > 0 && (
+        <div className="absolute bottom-28 right-2 z-30 bg-black/80 border border-yellow-500/50 rounded-lg px-2 py-1 text-center">
+          <p className="text-yellow-400 text-[9px] font-bold">Pressagio</p>
+          <div className="flex gap-0.5 justify-center">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className={`w-2 h-2 rounded-full ${i < ragnaOmenMarkers ? "bg-yellow-400" : "bg-gray-600"}`} />
+            ))}
+          </div>
+          <p className="text-yellow-200/70 text-[7px]">{ragnaOmenMarkers}/5</p>
+        </div>
+      )}
 
       {/* Dragged hand card ghost - GPU accelerated */}
       {draggedHandCard && (
@@ -5535,6 +5845,8 @@ const handleAllyUnitSelect = (index: number) => {
                 : ugTargetMode.type === "kensei_ifraid" ? "KENSEI IFRAID"
                 : ugTargetMode.type === "mefisto_foles" ? "MEFISTO FOLES"
                 : ugTargetMode.type === "nightmare_armageddon" ? "NIGHTMARE ARMAGEDDON"
+                : ugTargetMode.type === "vatnavordr_messiham" ? "VATNAVORDR MESSIHAM"
+                : ugTargetMode.type === "yggdra_nidhogg" ? "YGGDRA NIDHOGG"
                 : "UG ABILITY"}
             </h3>
             <p className="text-yellow-200/80 text-xs mb-2">
@@ -5543,6 +5855,8 @@ const handleAllyUnitSelect = (index: number) => {
                 : ugTargetMode.type === "kensei_ifraid" ? "Selecione uma carta do oponente (se unidade, causa 4 DP aos LP)"
                 : ugTargetMode.type === "mefisto_foles" ? "Selecione uma carta do oponente para destruir"
                 : ugTargetMode.type === "nightmare_armageddon" ? "Selecione uma unidade do oponente com 3 DP ou menos"
+                : ugTargetMode.type === "vatnavordr_messiham" ? "Selecione uma carta do oponente para congelar (se unidade, -2 LP)"
+                : ugTargetMode.type === "yggdra_nidhogg" ? "Selecione uma Function inimiga para destruir"
                 : "Selecione um alvo"}
             </p>
             <button
