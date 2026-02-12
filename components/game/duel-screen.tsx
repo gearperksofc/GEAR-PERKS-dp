@@ -4960,8 +4960,7 @@ const handleAllyUnitSelect = (index: number) => {
                             // Toggle the blue "Ativar efeito" button on click
                             if (isPlayerTurn && phase === "main" && !playerUgAbilityUsed && !ugTargetMode.active &&
                               ["ODEN SWORD", "TWILIGH AVALON", "KENSEI IFRAID", "MEFISTO FOLES", "NIGHTMARE ARMAGEDDON"].includes(playerField.ultimateZone?.ability || "") &&
-                              ((playerField.ultimateZone?.requiresUnit && findUnitByName(playerField.unitZone, playerField.ultimateZone.requiresUnit) !== -1) ||
-                               (!playerField.ultimateZone?.requiresUnit && playerField.ultimateZone?.ability === "ISGRIMM FENRIR"))
+                              playerField.ultimateZone?.requiresUnit && findUnitByName(playerField.unitZone, playerField.ultimateZone.requiresUnit) !== -1
                             ) {
                               setShowUgActivateBtn((prev) => !prev)
                             }
@@ -5541,9 +5540,9 @@ const handleAllyUnitSelect = (index: number) => {
             <p className="text-yellow-200/80 text-xs mb-2">
               {ugTargetMode.type === "oden_sword" ? "Selecione uma Function inimiga para destruir"
                 : ugTargetMode.type === "twiligh_avalon" ? "Selecione uma carta do oponente para devolver a mao"
-                : ugTargetMode.type === "kensei_ifraid" ? "Selecione uma carta do oponente"
-                : ugTargetMode.type === "mefisto_foles" ? "Selecione uma carta do oponente"
-                : ugTargetMode.type === "nightmare_armageddon" ? "Selecione uma carta do oponente (unidade com 3 DP ou menos)"
+                : ugTargetMode.type === "kensei_ifraid" ? "Selecione uma carta do oponente (se unidade, causa 4 DP aos LP)"
+                : ugTargetMode.type === "mefisto_foles" ? "Selecione uma carta do oponente para destruir"
+                : ugTargetMode.type === "nightmare_armageddon" ? "Selecione uma unidade do oponente com 3 DP ou menos"
                 : "Selecione um alvo"}
             </p>
             <button
