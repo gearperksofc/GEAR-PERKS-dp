@@ -3514,28 +3514,26 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
           })
         }
       }
-    }
 
-        // ISGRIMM FENRIR: when equipped Ventus unit attacks, another Ventus unit gets +2 DP
-        if (playerField.ultimateZone?.ability === "ISGRIMM FENRIR" && attacker.element === "Ventus") {
-          const equippedUnitName = playerField.ultimateZone.requiresUnit
-          // Find another Ventus unit that is NOT the attacker
-          setPlayerField((prev) => {
-            const newUnits = [...prev.unitZone]
-            let buffed = false
-            for (let idx = 0; idx < newUnits.length; idx++) {
-              const u = newUnits[idx]
-              if (u && u.element === "Ventus" && idx !== attackState.attackerIndex && u.name !== equippedUnitName) {
-                newUnits[idx] = { ...u, currentDp: u.currentDp + 2 }
-                showEffectFeedback(`ISGRIMM FENRIR: ${u.name} +2 DP!`, "success")
-                buffed = true
-                break
-              }
+      // ISGRIMM FENRIR: when equipped Ventus unit attacks, another Ventus unit gets +2 DP
+      if (playerField.ultimateZone?.ability === "ISGRIMM FENRIR" && attacker.element === "Ventus") {
+        const equippedUnitName = playerField.ultimateZone.requiresUnit
+        // Find another Ventus unit that is NOT the attacker
+        setPlayerField((prev) => {
+          const newUnits = [...prev.unitZone]
+          let buffed = false
+          for (let idx = 0; idx < newUnits.length; idx++) {
+            const u = newUnits[idx]
+            if (u && u.element === "Ventus" && idx !== attackState.attackerIndex && u.name !== equippedUnitName) {
+              newUnits[idx] = { ...u, currentDp: u.currentDp + 2 }
+              showEffectFeedback(`ISGRIMM FENRIR: ${u.name} +2 DP!`, "success")
+              buffed = true
+              break
             }
-            if (!buffed) return prev
-            return { ...prev, unitZone: newUnits as (FieldCard | null)[] }
-          })
-        }
+          }
+          if (!buffed) return prev
+          return { ...prev, unitZone: newUnits as (FieldCard | null)[] }
+        })
       }
     }
 
