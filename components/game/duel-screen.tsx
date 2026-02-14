@@ -1043,6 +1043,242 @@ const FUNCTION_CARD_EFFECTS: Record<string, FunctionCardEffect> = {
       return { success: true, message: `Dado: ${diceResult}! ${allyUnit.name} +${dpBonus} DP!${bonusMessage}` }
     },
   },
+
+  // ========== NEW DICE FUNCTION CARDS ==========
+
+  "dados-da-calamidade": {
+    id: "dados-da-calamidade",
+    name: "Dados da Calamidade",
+    requiresTargets: true,
+    requiresDice: true,
+    targetConfig: {
+      allyUnits: 1,
+    },
+    canActivate: (context) => {
+      const hasAllyUnits = context.playerField.unitZone.some((u) => u !== null)
+      if (!hasAllyUnits) {
+        return { canActivate: false, reason: "Voce precisa ter uma unidade em campo" }
+      }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      if (!targets?.allyUnitIndices?.length) {
+        return { success: false, message: "Selecione uma unidade sua" }
+      }
+
+      const allyIndex = targets.allyUnitIndices[0]
+      const allyUnit = context.playerField.unitZone[allyIndex]
+
+      if (!allyUnit) {
+        return { success: false, message: "Unidade nao encontrada" }
+      }
+
+      const diceResult = targets.diceResult || 1
+      const currentDp = allyUnit.currentDp || allyUnit.dp
+
+      if (diceResult >= 1 && diceResult <= 2) {
+        // 1-2: -5 DP
+        const newDp = Math.max(0, currentDp - 5)
+        const isDestroyed = newDp <= 0
+
+        context.setPlayerField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          const newGraveyard = [...prev.graveyard]
+
+          if (isDestroyed) {
+            if (newUnitZone[allyIndex]) {
+              newGraveyard.push(newUnitZone[allyIndex]!)
+            }
+            newUnitZone[allyIndex] = null
+          } else {
+            if (newUnitZone[allyIndex]) {
+              newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp }
+            }
+          }
+          return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
+        })
+
+        if (isDestroyed) {
+          return { success: true, message: `Dado: ${diceResult}! ${allyUnit.name} perdeu 5 DP e foi destruida!` }
+        }
+        return { success: true, message: `Dado: ${diceResult}! ${allyUnit.name} perdeu 5 DP (${currentDp} -> ${newDp})` }
+      } else if (diceResult >= 3 && diceResult <= 4) {
+        // 3-4: Nada acontece
+        return { success: true, message: `Dado: ${diceResult}! Nada acontece.` }
+      } else {
+        // 5-6: +8 DP agora, -5 DP apos 2 turnos
+        const newDp = currentDp + 8
+
+        context.setPlayerField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          if (newUnitZone[allyIndex]) {
+            newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp }
+          }
+          return { ...prev, unitZone: newUnitZone }
+        })
+
+        return {
+          success: true,
+          message: `Dado: ${diceResult}! ${allyUnit.name} ganhou +8 DP! (${currentDp} -> ${newDp}). Apos 2 turnos, -5 DP.`,
+          delayedEffect: { unitIndex: allyIndex, unitName: allyUnit.name, dpChange: -5, turnsRemaining: 2 },
+        }
+      }
+    },
+  },
+
+  "dados-da-fortuna": {
+    id: "dados-da-fortuna",
+    name: "Dados da Fortuna",
+    requiresTargets: true,
+    requiresDice: true,
+    targetConfig: {
+      allyUnits: 1,
+    },
+    canActivate: (context) => {
+      const hasAllyUnits = context.playerField.unitZone.some((u) => u !== null)
+      if (!hasAllyUnits) {
+        return { canActivate: false, reason: "Voce precisa ter uma unidade em campo" }
+      }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      if (!targets?.allyUnitIndices?.length) {
+        return { success: false, message: "Selecione uma unidade sua" }
+      }
+
+      const allyIndex = targets.allyUnitIndices[0]
+      const allyUnit = context.playerField.unitZone[allyIndex]
+
+      if (!allyUnit) {
+        return { success: false, message: "Unidade nao encontrada" }
+      }
+
+      const diceResult = targets.diceResult || 1
+      const currentDp = allyUnit.currentDp || allyUnit.dp
+      let dpBonus = 0
+      let drawCount = 0
+
+      if (diceResult >= 1 && diceResult <= 2) {
+        dpBonus = 1
+      } else if (diceResult >= 3 && diceResult <= 4) {
+        dpBonus = 2
+        drawCount = 1
+      } else {
+        dpBonus = 3
+        drawCount = 2
+      }
+
+      const newDp = currentDp + dpBonus
+      context.setPlayerField((prev) => {
+        const newUnitZone = [...prev.unitZone]
+        if (newUnitZone[allyIndex]) {
+          newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp }
+        }
+        // Draw cards
+        const drawnCards = prev.deck.slice(0, drawCount)
+        return {
+          ...prev,
+          unitZone: newUnitZone,
+          hand: [...prev.hand, ...drawnCards],
+          deck: prev.deck.slice(drawCount),
+        }
+      })
+
+      const drawMsg = drawCount > 0 ? ` Comprou ${drawCount} carta(s)!` : ""
+      return { success: true, message: `Dado: ${diceResult}! ${allyUnit.name} +${dpBonus} DP! (${currentDp} -> ${newDp})${drawMsg}` }
+    },
+  },
+
+  "dados-do-cataclismo": {
+    id: "dados-do-cataclismo",
+    name: "Dados do Cataclismo",
+    requiresTargets: true,
+    requiresDice: true,
+    targetConfig: {
+      allyUnits: 1,
+    },
+    canActivate: (context) => {
+      const hasAllyUnits = context.playerField.unitZone.some((u) => u !== null)
+      if (!hasAllyUnits) {
+        return { canActivate: false, reason: "Voce precisa ter uma unidade em campo" }
+      }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      if (!targets?.allyUnitIndices?.length) {
+        return { success: false, message: "Selecione uma unidade sua" }
+      }
+
+      const allyIndex = targets.allyUnitIndices[0]
+      const allyUnit = context.playerField.unitZone[allyIndex]
+
+      if (!allyUnit) {
+        return { success: false, message: "Unidade nao encontrada" }
+      }
+
+      const diceResult = targets.diceResult || 1
+      const currentDp = allyUnit.currentDp || allyUnit.dp
+
+      if (diceResult >= 1 && diceResult <= 3) {
+        // 1-3: Nenhuma unidade recebe bonus
+        return { success: true, message: `Dado: ${diceResult}! Nenhuma unidade recebe bonus.` }
+      } else {
+        // 4-6: +6 DP
+        const newDp = currentDp + 6
+        context.setPlayerField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          if (newUnitZone[allyIndex]) {
+            newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp }
+          }
+          return { ...prev, unitZone: newUnitZone }
+        })
+
+        let extraMsg = ""
+
+        // If result is exactly 6: also apply -3 DP to an enemy unit
+        if (diceResult === 6) {
+          // Find strongest enemy unit and apply -3 DP
+          const enemyUnits = context.enemyField.unitZone
+          let bestIdx = -1
+          let bestDp = -1
+          enemyUnits.forEach((u, idx) => {
+            if (u && u.currentDp > bestDp) {
+              bestDp = u.currentDp
+              bestIdx = idx
+            }
+          })
+
+          if (bestIdx !== -1) {
+            const enemyUnit = enemyUnits[bestIdx]!
+            const enemyNewDp = Math.max(0, enemyUnit.currentDp - 3)
+            const enemyDestroyed = enemyNewDp <= 0
+
+            context.setEnemyField((prev) => {
+              const newEnemyUnits = [...prev.unitZone]
+              const newGraveyard = [...prev.graveyard]
+              if (enemyDestroyed) {
+                if (newEnemyUnits[bestIdx]) newGraveyard.push(newEnemyUnits[bestIdx]!)
+                newEnemyUnits[bestIdx] = null
+              } else {
+                if (newEnemyUnits[bestIdx]) {
+                  newEnemyUnits[bestIdx] = { ...newEnemyUnits[bestIdx]!, currentDp: enemyNewDp }
+                }
+              }
+              return { ...prev, unitZone: newEnemyUnits, graveyard: newGraveyard }
+            })
+
+            if (enemyDestroyed) {
+              extraMsg = ` CRITICO! ${enemyUnit.name} inimiga recebeu -3 DP e foi destruida!`
+            } else {
+              extraMsg = ` CRITICO! ${enemyUnit.name} inimiga recebeu -3 DP! (${enemyUnit.currentDp} -> ${enemyNewDp})`
+            }
+          }
+        }
+
+        return { success: true, message: `Dado: ${diceResult}! ${allyUnit.name} +6 DP! (${currentDp} -> ${newDp})${extraMsg}` }
+      }
+    },
+  },
 }
 
 // Helper function to extract base card ID (removes deck timestamp suffix)
@@ -1241,6 +1477,14 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
     cardName: string
     onComplete: ((result: number) => void) | null
   } | null>(null)
+
+  // Delayed DP effects (e.g. Dados da Calamidade 5-6: +8 DP now, -5 DP after 2 turns)
+  const [delayedDpEffects, setDelayedDpEffects] = useState<{
+    unitIndex: number
+    unitName: string
+    dpChange: number
+    turnsRemaining: number
+  }[]>([])
 
   const [draggedHandCard, setDraggedHandCard] = useState<{
     index: number
@@ -4209,6 +4453,42 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
           // Reset Skuggi Draugr once-per-turn usage
           setSkuggiUsedThisTurn(false)
 
+          // Process delayed DP effects (e.g., Dados da Calamidade -5 DP after 2 turns)
+          setDelayedDpEffects((prevEffects) => {
+            const stillPending: typeof prevEffects = []
+            const triggered: typeof prevEffects = []
+            prevEffects.forEach((eff) => {
+              if (eff.turnsRemaining <= 1) {
+                triggered.push(eff)
+              } else {
+                stillPending.push({ ...eff, turnsRemaining: eff.turnsRemaining - 1 })
+              }
+            })
+            // Apply triggered effects
+            if (triggered.length > 0) {
+              setPlayerField((prev) => {
+                const newUnitZone = [...prev.unitZone]
+                const newGraveyard = [...prev.graveyard]
+                triggered.forEach((eff) => {
+                  const unit = newUnitZone[eff.unitIndex]
+                  if (unit) {
+                    const newDp = Math.max(0, unit.currentDp + eff.dpChange)
+                    if (newDp <= 0) {
+                      newGraveyard.push(unit)
+                      newUnitZone[eff.unitIndex] = null
+                      showEffectFeedback(`Dados da Calamidade: ${eff.unitName} recebeu ${eff.dpChange} DP e foi destruida!`, "error")
+                    } else {
+                      newUnitZone[eff.unitIndex] = { ...unit, currentDp: newDp }
+                      showEffectFeedback(`Dados da Calamidade: ${eff.unitName} recebeu ${eff.dpChange} DP! (${unit.currentDp} -> ${newDp})`, "error")
+                    }
+                  }
+                })
+                return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
+              })
+            }
+            return stillPending
+          })
+
           // RAGNA GULLINKAMBI: add omen marker at start of player turn + draw extra cards
           setRagnaOmenMarkers((prevMarkers) => {
             const newMarkers = prevMarkers + 1
@@ -4388,6 +4668,11 @@ const handleEnemyUnitSelect = (index: number) => {
         ...prev,
         graveyard: [...prev.graveyard, cardToUse],
       }))
+      // Register delayed DP effect if returned (Dados da Calamidade 5-6)
+      if ((result as any).delayedEffect) {
+        const de = (result as any).delayedEffect
+        setDelayedDpEffects((prev) => [...prev, de])
+      }
     } else {
       showEffectFeedback(`${cardToUse.name}: ${result.message || "Falha"}`, "error")
     }
@@ -4409,7 +4694,7 @@ const handleAllyUnitSelect = (index: number) => {
   
   // Check if this is a dice card (they don't need selectedEnemyIndex)
   const cardId = getBaseCardId(itemSelectionMode.itemCard.id || "")
-  const isDiceCard = cardId.includes("dados-do-destino") || cardId.includes("dados-elementais")
+  const isDiceCard = cardId.includes("dados-do-destino") || cardId.includes("dados-elementais") || cardId.includes("dados-da-calamidade") || cardId.includes("dados-da-fortuna") || cardId.includes("dados-do-cataclismo")
   
   // For Véu dos Laços Cruzados with "buff" option, we don't need selectedEnemyIndex
   const isVeuBuff = itemSelectionMode.chosenOption === "buff"
@@ -4449,6 +4734,9 @@ const handleAllyUnitSelect = (index: number) => {
       const isDadosDestinoGentil = itemSelectionMode.itemCard.name === "Dados do Destino Gentil"
       const isDadosElementaisAlpha = itemSelectionMode.itemCard.name === "Dados Elementais Alpha"
       const isDadosElementaisOmega = itemSelectionMode.itemCard.name === "Dados Elementais Omega"
+      const isDadosDaCalamidade = itemSelectionMode.itemCard.name === "Dados da Calamidade"
+      const isDadosDaFortuna = itemSelectionMode.itemCard.name === "Dados da Fortuna"
+      const isDadosDoCataclismo = itemSelectionMode.itemCard.name === "Dados do Cataclismo"
       if (isAmplificador) effect = FUNCTION_CARD_EFFECTS["amplificador-de-poder"]
       else if (isBandagem) effect = FUNCTION_CARD_EFFECTS["bandagem-restauradora"]
       else if (isAdaga) effect = FUNCTION_CARD_EFFECTS["adaga-energizada"]
@@ -4467,6 +4755,9 @@ const handleAllyUnitSelect = (index: number) => {
       else if (isDadosDestinoGentil) effect = FUNCTION_CARD_EFFECTS["dados-do-destino-gentil"]
       else if (isDadosElementaisAlpha) effect = FUNCTION_CARD_EFFECTS["dados-elementais-alpha"]
       else if (isDadosElementaisOmega) effect = FUNCTION_CARD_EFFECTS["dados-elementais-omega"]
+      else if (isDadosDaCalamidade) effect = FUNCTION_CARD_EFFECTS["dados-da-calamidade"]
+      else if (isDadosDaFortuna) effect = FUNCTION_CARD_EFFECTS["dados-da-fortuna"]
+      else if (isDadosDoCataclismo) effect = FUNCTION_CARD_EFFECTS["dados-do-cataclismo"]
       }
     
   if (effect) {
@@ -4494,6 +4785,11 @@ const handleAllyUnitSelect = (index: number) => {
         ...prev,
         graveyard: [...prev.graveyard, cardToUse],
       }))
+      // Register delayed DP effect if returned (Dados da Calamidade 5-6)
+      if ((result as any).delayedEffect) {
+        const de = (result as any).delayedEffect
+        setDelayedDpEffects((prev) => [...prev, de])
+      }
     } else {
       showEffectFeedback(`${cardToUse.name}: ${result.message || "Falha"}`, "error")
     }
@@ -5874,7 +6170,7 @@ const handleAllyUnitSelect = (index: number) => {
             <h3 className="text-yellow-400 font-bold text-lg mb-3">{itemSelectionMode.itemCard.name}</h3>
   {(() => {
     const cardId = getBaseCardId(itemSelectionMode.itemCard?.id || "")
-    const isDiceCard = cardId.includes("dados-do-destino") || cardId.includes("dados-elementais")
+    const isDiceCard = cardId.includes("dados-do-destino") || cardId.includes("dados-elementais") || cardId.includes("dados-da-calamidade") || cardId.includes("dados-da-fortuna") || cardId.includes("dados-do-cataclismo")
     
     if (isDiceCard) {
       return (
