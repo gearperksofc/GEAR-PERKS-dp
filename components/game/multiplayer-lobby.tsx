@@ -32,9 +32,11 @@ interface RoomData {
   hostId: string
   hostName: string
   hostDeck: Deck | null
+  hostAvatar: string | null
   guestId: string | null
   guestName: string | null
   guestDeck: Deck | null
+  guestAvatar: string | null
   hostReady: boolean
   guestReady: boolean
 }
@@ -113,6 +115,7 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         room_code: code,
         host_id: hostUUID,
         host_name: playerProfile.name || "Jogador",
+        host_avatar: playerProfile.avatarUrl || null,
         host_deck: deckToSerialize ? JSON.stringify(deckToSerialize) : null,
         status: "waiting",
         host_ready: false,
@@ -143,10 +146,12 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         isHost: true,
         hostId: hostUUID,
         hostName: playerProfile.name || "Jogador",
+        hostAvatar: playerProfile.avatarUrl || null,
         hostDeck: selectedDeck,
         guestId: null,
         guestName: null,
         guestDeck: null,
+        guestAvatar: null,
         hostReady: false,
         guestReady: false,
       })
@@ -216,6 +221,7 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         .update({
           guest_id: guestUUID,
           guest_name: playerProfile.name || "Jogador",
+          guest_avatar: playerProfile.avatarUrl || null,
           guest_deck: guestDeckToSerialize ? JSON.stringify(guestDeckToSerialize) : null,
           status: "lobby",
         })
@@ -246,10 +252,12 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         isHost: false,
         hostId: room.host_id,
         hostName: room.host_name,
+        hostAvatar: room.host_avatar || null,
         hostDeck: hostDeck,
         guestId: guestUUID,
         guestName: playerProfile.name,
         guestDeck: selectedDeck,
+        guestAvatar: playerProfile.avatarUrl || null,
         hostReady: room.host_ready,
         guestReady: false,
       })
@@ -318,7 +326,9 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
               guestId: newData.guest_id,
               guestName: newData.guest_name,
               guestDeck: guestDeck,
+              guestAvatar: newData.guest_avatar || prev.guestAvatar,
               hostDeck: hostDeck,
+              hostAvatar: newData.host_avatar || prev.hostAvatar,
               hostReady: newData.host_ready,
               guestReady: newData.guest_ready,
             }
@@ -736,15 +746,32 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
             </div>
           </div>
 
-          {/* Waiting Animation */}
+          {/* Host Profile + Waiting Animation */}
           <div className="bg-slate-800/50 rounded-xl p-8 border border-slate-700 text-center">
             <div className="flex justify-center mb-4">
-              <Loader2 className="w-12 h-12 text-amber-400 animate-spin" />
+              <div className="w-20 h-20 rounded-full bg-amber-500/20 border-2 border-amber-500/50 flex items-center justify-center overflow-hidden relative">
+                {playerProfile.avatarUrl ? (
+                  <Image 
+                    src={playerProfile.avatarUrl} 
+                    alt={playerProfile.name || "Host"} 
+                    fill
+                    className="object-cover"
+                  />
+                ) : (
+                  <span className="text-amber-400 font-bold text-2xl">
+                    {(playerProfile.name || "H").charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
             </div>
-            <p className="text-white font-medium">Esperando outro jogador entrar...</p>
-            <p className="text-slate-400 text-sm mt-2">
+            <p className="text-white font-medium mb-1">{playerProfile.name || "Jogador"}</p>
+            <p className="text-slate-400 text-sm mb-4">
               Deck: {selectedDeck?.name}
             </p>
+            <div className="flex justify-center mb-3">
+              <Loader2 className="w-8 h-8 text-amber-400 animate-spin" />
+            </div>
+            <p className="text-slate-400 text-sm">Esperando outro jogador entrar...</p>
           </div>
         </div>
       </div>
@@ -776,14 +803,13 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
               roomData.hostReady ? "border-green-500" : "border-slate-700"
             }`}>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-12 h-12 rounded-full bg-amber-500/30 flex items-center justify-center overflow-hidden border-2 border-amber-500/50">
-                  {roomData.isHost && playerProfile.avatarUrl ? (
+                <div className="w-12 h-12 rounded-full bg-amber-500/30 flex items-center justify-center overflow-hidden border-2 border-amber-500/50 relative">
+                  {roomData.hostAvatar ? (
                     <Image 
-                      src={playerProfile.avatarUrl} 
+                      src={roomData.hostAvatar} 
                       alt={roomData.hostName} 
-                      width={48} 
-                      height={48} 
-                      className="object-cover w-full h-full"
+                      fill
+                      className="object-cover"
                     />
                   ) : (
                     <span className="text-amber-400 font-bold text-lg">{roomData.hostName?.charAt(0)?.toUpperCase() || "H"}</span>
@@ -813,14 +839,13 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
               roomData.guestReady ? "border-green-500" : "border-slate-700"
             }`}>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-12 h-12 rounded-full bg-blue-500/30 flex items-center justify-center overflow-hidden border-2 border-blue-500/50">
-                  {!roomData.isHost && playerProfile.avatarUrl ? (
+                <div className="w-12 h-12 rounded-full bg-blue-500/30 flex items-center justify-center overflow-hidden border-2 border-blue-500/50 relative">
+                  {roomData.guestAvatar ? (
                     <Image 
-                      src={playerProfile.avatarUrl} 
+                      src={roomData.guestAvatar} 
                       alt={roomData.guestName || "Guest"} 
-                      width={48} 
-                      height={48} 
-                      className="object-cover w-full h-full"
+                      fill
+                      className="object-cover"
                     />
                   ) : roomData.guestName ? (
                     <span className="text-blue-400 font-bold text-lg">{roomData.guestName.charAt(0).toUpperCase()}</span>

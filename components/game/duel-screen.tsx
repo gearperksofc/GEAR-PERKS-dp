@@ -25,9 +25,11 @@ interface RoomData {
   hostId: string
   hostName: string
   hostDeck: GameDeck | null
+  hostAvatar?: string | null
   guestId: string | null
   guestName: string | null
   guestDeck: GameDeck | null
+  guestAvatar?: string | null
   hostReady: boolean
   guestReady: boolean
 }
