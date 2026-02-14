@@ -228,31 +228,17 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   const opponentDeck = roomData.isHost ? roomData.guestDeck : roomData.hostDeck
   const opponentName = roomData.isHost ? roomData.guestName : roomData.hostName
 
-  // Debug log for deck and turn
-  console.log("[v0] === DUEL INIT DEBUG ===")
-  console.log("[v0] roomData.isHost:", roomData.isHost)
-  console.log("[v0] playerId:", playerId)
-  console.log("[v0] roomData.hostDeck:", roomData.hostDeck?.name, "cards:", roomData.hostDeck?.cards?.length)
-  console.log("[v0] roomData.guestDeck:", roomData.guestDeck?.name, "cards:", roomData.guestDeck?.cards?.length)
-  console.log("[v0] myDeck (computed):", myDeck?.name, "cards:", myDeck?.cards?.length)
-  console.log("[v0] opponentDeck (computed):", opponentDeck?.name)
-  console.log("[v0] isMyTurn (initial from isHost):", roomData.isHost)
+  // Ref to always have latest handleOpponentAction (must be declared before useEffect that uses it)
+  const handleOpponentActionRef = useRef<(action: DuelAction) => void>(() => {})
 
   // Initialize game
   useEffect(() => {
-    console.log("[v0] Initialize useEffect running, myDeck:", myDeck?.name)
-    if (!myDeck) {
-      console.log("[v0] No myDeck found, skipping initialization")
-      return
-    }
+    if (!myDeck) return
 
     // Shuffle deck and draw initial hand
     const shuffledDeck = shuffleArray([...myDeck.cards])
     const initialHand = shuffledDeck.slice(0, 5)
     const remainingDeck = shuffledDeck.slice(5)
-
-    console.log("[v0] Setting initial hand with", initialHand.length, "cards")
-    console.log("[v0] Initial hand cards:", initialHand.map(c => c.name))
 
     setMyField((prev) => ({
       ...prev,
@@ -269,65 +255,43 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       }))
     }
 
-    // Subscribe to game actions
-    subscribeToActions()
-    subscribeToChat()
+    // Subscribe to game actions via Broadcast (fast WebSocket, no DB round-trip)
+    const actionsChannel = supabase
+      .channel(`duel-broadcast-${roomData.roomId}`, { config: { broadcast: { self: false } } })
+      .on("broadcast", { event: "game-action" }, ({ payload }) => {
+        if (payload && payload.playerId !== playerId) {
+          handleOpponentActionRef.current(payload as DuelAction)
+        }
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          // Send initial state to opponent via Broadcast
+          actionsChannel.send({
+            type: "broadcast",
+            event: "game-action",
+            payload: {
+              type: "draw",
+              playerId,
+              data: { handSize: initialHand.length, deckSize: remainingDeck.length },
+              timestamp: Date.now(),
+            },
+          })
+        }
+      })
+    actionsChannelRef.current = actionsChannel
 
-    // Send initial state to opponent
-    sendAction({
-      type: "draw",
-      playerId,
-      data: { handSize: initialHand.length, deckSize: remainingDeck.length },
-      timestamp: Date.now(),
-    })
+    // Subscribe to chat
+    subscribeToChat()
 
     return () => {
       if (actionsChannelRef.current) {
-        actionsChannelRef.current.unsubscribe()
+        supabase.removeChannel(actionsChannelRef.current)
       }
       if (chatChannelRef.current) {
-        chatChannelRef.current.unsubscribe()
+        supabase.removeChannel(chatChannelRef.current)
       }
     }
   }, [])
-
-  // Subscribe to game actions
-  const subscribeToActions = useCallback(() => {
-    console.log("[v0] Subscribing to actions for room:", roomData.roomId)
-    const channel = supabase
-      .channel(`duel-actions-${roomData.roomId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "duel_actions",
-          filter: `room_id=eq.${roomData.roomId}`,
-        },
-        (payload) => {
-          console.log("[v0] Received action payload:", payload)
-          const action = payload.new as any
-          console.log("[v0] Action player_id:", action.player_id, "My playerId:", playerId)
-          if (action.player_id !== playerId) {
-            console.log("[v0] Processing opponent action")
-            let actionData = action.action_data
-            if (typeof actionData === "string") {
-              try {
-                actionData = JSON.parse(actionData)
-              } catch {
-                // Keep as is if parsing fails
-              }
-            }
-            handleOpponentAction(actionData)
-          } else {
-            console.log("[v0] Skipping own action")
-          }
-        }
-      )
-      .subscribe()
-
-    actionsChannelRef.current = channel
-  }, [supabase, roomData.roomId, playerId])
 
   // Subscribe to chat
   const subscribeToChat = useCallback(() => {
@@ -363,34 +327,30 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     chatChannelRef.current = channel
   }, [supabase, roomData.roomId])
 
-  // Send action to database
-  const sendAction = useCallback(async (action: DuelAction) => {
-    console.log("[v0] Sending action:", action.type, action)
-    
-    // Get the next sequence number for this room
-    const { data: seqData } = await supabase.rpc('get_next_action_sequence', { 
-      p_room_id: roomData.roomId 
-    })
-    const sequenceNumber = seqData || 1
-    
-    const { error } = await supabase.from("duel_actions").insert({
+  // Send action via Broadcast (instant) + fire-and-forget DB persist
+  const sendAction = useCallback((action: DuelAction) => {
+    // Instant delivery via WebSocket Broadcast
+    if (actionsChannelRef.current) {
+      actionsChannelRef.current.send({
+        type: "broadcast",
+        event: "game-action",
+        payload: action,
+      })
+    }
+
+    // Fire-and-forget DB persist for replay/recovery (non-blocking)
+    supabase.from("duel_actions").insert({
       room_id: roomData.roomId,
       player_id: playerId,
       action_type: action.type,
       action_data: JSON.stringify(action),
-      sequence_number: sequenceNumber,
+    }).then(({ error }) => {
+      if (error) console.error("DB persist error:", error)
     })
-    if (error) {
-      console.error("[v0] Error sending action:", error)
-    } else {
-      console.log("[v0] Action sent successfully with sequence:", sequenceNumber)
-    }
   }, [supabase, roomData.roomId, playerId])
 
-  // Handle opponent's action
-  const handleOpponentAction = (action: DuelAction) => {
-    console.log("[v0] Received opponent action:", action.type, action)
-    
+  // Handle opponent's action - uses functional state updates everywhere to avoid stale closures
+  const handleOpponentAction = useCallback((action: DuelAction) => {
     switch (action.type) {
       case "draw":
         setOpponentField((prev) => ({
@@ -410,12 +370,12 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
               currentDp: cardData.dp,
               canAttack: false,
               hasAttacked: false,
-              canAttackTurn: turn,
+              canAttackTurn: turnRef.current,
             }
             return {
               ...prev,
               unitZone: newUnitZone,
-              hand: prev.hand.slice(0, -1),
+              hand: prev.hand.length > 0 ? prev.hand.slice(0, -1) : prev.hand,
             }
           })
         } else if (action.data.zone === "function") {
@@ -425,7 +385,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
             return {
               ...prev,
               functionZone: newFunctionZone,
-              hand: prev.hand.slice(0, -1),
+              hand: prev.hand.length > 0 ? prev.hand.slice(0, -1) : prev.hand,
             }
           })
         }
@@ -435,7 +395,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         setOpponentField((prev) => ({
           ...prev,
           scenarioZone: action.data.card,
-          hand: prev.hand.slice(0, -1),
+          hand: prev.hand.length > 0 ? prev.hand.slice(0, -1) : prev.hand,
         }))
         break
 
@@ -449,14 +409,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
               currentDp: cardData.dp,
               canAttack: false,
               hasAttacked: false,
-              canAttackTurn: turn,
+              canAttackTurn: turnRef.current,
             },
-            hand: prev.hand.slice(0, -1),
+            hand: prev.hand.length > 0 ? prev.hand.slice(0, -1) : prev.hand,
           }
         })
         break
 
-      case "attack":
+      case "attack": {
         const { attackerIndex, targetType, targetIndex, damage } = action.data
 
         if (targetType === "direct") {
@@ -465,47 +425,52 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
             life: Math.max(0, prev.life - damage),
           }))
         } else if (targetType === "unit") {
+          // Apply damage to my unit (immutable update)
           setMyField((prev) => {
             const newUnitZone = [...prev.unitZone]
             const newGraveyard = [...prev.graveyard]
             const target = newUnitZone[targetIndex]
             if (target) {
-              target.currentDp -= damage
-              if (target.currentDp <= 0) {
-                newGraveyard.push(target)
+              const newDp = target.currentDp - damage
+              if (newDp <= 0) {
+                newGraveyard.push({ ...target, currentDp: 0 })
                 newUnitZone[targetIndex] = null
+              } else {
+                newUnitZone[targetIndex] = { ...target, currentDp: newDp }
               }
             }
             return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
           })
 
-          // Attacker also takes damage from defender
+          // Attacker takes counter damage (immutable update)
           setOpponentField((prev) => {
             const newUnitZone = [...prev.unitZone]
             const newGraveyard = [...prev.graveyard]
             const attacker = newUnitZone[attackerIndex]
             if (attacker && action.data.counterDamage) {
-              attacker.currentDp -= action.data.counterDamage
-              if (attacker.currentDp <= 0) {
-                newGraveyard.push(attacker)
+              const newDp = attacker.currentDp - action.data.counterDamage
+              if (newDp <= 0) {
+                newGraveyard.push({ ...attacker, currentDp: 0 })
                 newUnitZone[attackerIndex] = null
+              } else {
+                newUnitZone[attackerIndex] = { ...attacker, currentDp: newDp }
               }
             }
             return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
           })
         }
 
-        // Mark attacker as having attacked
+        // Mark attacker as having attacked (immutable)
         setOpponentField((prev) => {
           const newUnitZone = [...prev.unitZone]
           const attacker = newUnitZone[attackerIndex]
           if (attacker) {
-            attacker.hasAttacked = true
-            attacker.canAttack = false
+            newUnitZone[attackerIndex] = { ...attacker, hasAttacked: true, canAttack: false }
           }
           return { ...prev, unitZone: newUnitZone }
         })
         break
+      }
 
       case "damage":
         if (action.data.target === "player") {
@@ -517,30 +482,26 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         break
 
       case "end_turn":
-        console.log("[v0] Received end_turn action from opponent")
-        console.log("[v0] Setting isMyTurn to true")
-        setIsMyTurn(true)
-        setTurn((prev) => {
-          console.log("[v0] Incrementing turn from", prev, "to", prev + 1)
-          return prev + 1
+        // FIX: compute newTurn inside setTurn so we use the correct value for enabling units
+        setTurn((prevTurn) => {
+          const newTurn = prevTurn + 1
+          // Enable my units with the correct (new) turn number
+          setMyField((prevField) => ({
+            ...prevField,
+            unitZone: prevField.unitZone.map((unit) =>
+              unit ? { ...unit, canAttack: newTurn > unit.canAttackTurn, hasAttacked: false } : null
+            ),
+            ultimateZone: prevField.ultimateZone
+              ? { ...prevField.ultimateZone, canAttack: newTurn > prevField.ultimateZone.canAttackTurn, hasAttacked: false }
+              : null,
+          }))
+          return newTurn
         })
+        setIsMyTurn(true)
         setPhase("draw")
-        console.log("[v0] Changed phase to draw")
-
-        // Enable my units to attack
-        setMyField((prev) => ({
-          ...prev,
-          unitZone: prev.unitZone.map((unit) =>
-            unit && turn >= unit.canAttackTurn ? { ...unit, canAttack: true, hasAttacked: false } : unit
-          ),
-          ultimateZone: prev.ultimateZone && turn >= prev.ultimateZone.canAttackTurn
-            ? { ...prev.ultimateZone, canAttack: true, hasAttacked: false }
-            : prev.ultimateZone,
-        }))
         break
 
       case "surrender":
-        console.log("[v0] Received surrender action from opponent")
         if (!gameResultRecordedRef.current) {
           gameResultRecordedRef.current = true
           setWinReason("surrender")
@@ -553,25 +514,30 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         // Visual feedback for opponent's phase change
         break
     }
+  }, [])
 
-    // Check for game over
-    checkGameOver()
-  }
+  // Keep handleOpponentAction ref in sync
+  useEffect(() => {
+    handleOpponentActionRef.current = handleOpponentAction
+  }, [handleOpponentAction])
 
-  // Check for game over
+  // Check for game over - reads from refs to avoid stale closures
   const checkGameOver = useCallback(() => {
     if (gameResultRecordedRef.current) return
 
-    if (myField.life <= 0) {
+    const myLife = myFieldRef.current.life
+    const oppLife = opponentFieldRef.current.life
+
+    if (myLife <= 0) {
       gameResultRecordedRef.current = true
       setGameResult("lost")
       endGame("lost")
-    } else if (opponentField.life <= 0) {
+    } else if (oppLife <= 0) {
       gameResultRecordedRef.current = true
       setGameResult("won")
       endGame("won")
     }
-  }, [myField.life, opponentField.life])
+  }, [])
 
   // End the game
   const endGame = async (result: "won" | "lost") => {
@@ -591,12 +557,13 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   // Check game over on life changes
   useEffect(() => {
     checkGameOver()
-  }, [myField.life, opponentField.life, checkGameOver])
+  }, [myField.life, opponentField.life])
 
   // Global drag event listeners - using refs to avoid stale closures
   const draggedHandCardRef2 = useRef(draggedHandCard)
   const dropTargetRef = useRef(dropTarget)
   const myFieldRef = useRef(myField)
+  const opponentFieldRef = useRef(opponentField)
   const isMyTurnRef = useRef(isMyTurn)
   const phaseRef = useRef(phase)
   const turnRef = useRef(turn)
@@ -613,12 +580,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   }, [dropTarget])
   
   useEffect(() => {
-    console.log("[v0] myField changed - hand size:", myField.hand.length, "cards:", myField.hand.map(c => c?.name))
     myFieldRef.current = myField
   }, [myField])
+
+  useEffect(() => {
+    opponentFieldRef.current = opponentField
+  }, [opponentField])
   
   useEffect(() => {
-    console.log("[v0] isMyTurn changed to:", isMyTurn)
     isMyTurnRef.current = isMyTurn
   }, [isMyTurn])
   
@@ -1272,50 +1241,52 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         timestamp: Date.now(),
       })
 
-      // Mark attacker as having attacked
+      // Mark attacker as having attacked (immutable)
       setMyField((prev) => {
         const newUnitZone = [...prev.unitZone]
         const unit = newUnitZone[attackerIdx]
         if (unit) {
-          unit.hasAttacked = true
-          unit.canAttack = false
+          newUnitZone[attackerIdx] = { ...unit, hasAttacked: true, canAttack: false }
         }
         return { ...prev, unitZone: newUnitZone }
       })
     } else if (targetType === "unit" && targetIndex !== undefined) {
-      // Attack a unit
-      const target = opponentField.unitZone[targetIndex]
-      if (!target) return
+      // Read target DP from ref to avoid stale closure
+      const currentTarget = opponentFieldRef.current.unitZone[targetIndex]
+      if (!currentTarget) return
 
-      const targetDp = target.currentDp
+      const targetDp = currentTarget.currentDp
 
-      // Apply damage to opponent's unit
+      // Apply damage to opponent's unit (immutable)
       setOpponentField((prev) => {
         const newUnitZone = [...prev.unitZone]
         const newGraveyard = [...prev.graveyard]
         const targetUnit = newUnitZone[targetIndex]
         if (targetUnit) {
-          targetUnit.currentDp -= damage
-          if (targetUnit.currentDp <= 0) {
-            newGraveyard.push(targetUnit)
+          const newDp = targetUnit.currentDp - damage
+          if (newDp <= 0) {
+            newGraveyard.push({ ...targetUnit, currentDp: 0 })
             newUnitZone[targetIndex] = null
+          } else {
+            newUnitZone[targetIndex] = { ...targetUnit, currentDp: newDp }
           }
         }
         return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
       })
 
-      // Attacker takes counter damage
+      // Attacker takes counter damage (immutable)
       setMyField((prev) => {
         const newUnitZone = [...prev.unitZone]
         const newGraveyard = [...prev.graveyard]
         const attackerUnit = newUnitZone[attackerIdx]
         if (attackerUnit) {
-          attackerUnit.currentDp -= targetDp
-          attackerUnit.hasAttacked = true
-          attackerUnit.canAttack = false
-          if (attackerUnit.currentDp <= 0) {
-            newGraveyard.push(attackerUnit)
+          const newDp = attackerUnit.currentDp - targetDp
+          const updated = { ...attackerUnit, currentDp: newDp, hasAttacked: true, canAttack: false }
+          if (newDp <= 0) {
+            newGraveyard.push({ ...updated, currentDp: 0 })
             newUnitZone[attackerIdx] = null
+          } else {
+            newUnitZone[attackerIdx] = updated
           }
         }
         return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
@@ -1329,41 +1300,36 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       })
     }
 
-    checkGameOver()
+    // Defer game over check so state updates flush first
+    setTimeout(() => checkGameOver(), 0)
   }
 
   // End turn
   const endTurn = () => {
-    console.log("[v0] endTurn called, isMyTurn:", isMyTurn)
-    if (!isMyTurn) {
-      console.log("[v0] Cannot end turn - not my turn")
-      return
-    }
+    if (!isMyTurn) return
 
-    console.log("[v0] Ending my turn, setting isMyTurn to false")
     setIsMyTurn(false)
     setPhase("end")
     setSelectedHandCard(null)
 
-    // Disable my units
+    // Disable my units (immutable)
     setMyField((prev) => ({
       ...prev,
       unitZone: prev.unitZone.map((unit) => (unit ? { ...unit, canAttack: false, hasAttacked: false } : null)),
       ultimateZone: prev.ultimateZone ? { ...prev.ultimateZone, canAttack: false, hasAttacked: false } : null,
     }))
 
-    // Enable opponent's units
+    // Enable opponent's units (immutable)
     setOpponentField((prev) => ({
       ...prev,
       unitZone: prev.unitZone.map((unit) => (unit ? { ...unit, canAttack: true, hasAttacked: false } : null)),
       ultimateZone: prev.ultimateZone ? { ...prev.ultimateZone, canAttack: true, hasAttacked: false } : null,
     }))
 
-    console.log("[v0] Sending end_turn action to opponent, turn:", turn)
     sendAction({
       type: "end_turn",
       playerId,
-      data: { turn },
+      data: { turn: turnRef.current },
       timestamp: Date.now(),
     })
   }
@@ -1406,15 +1372,15 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     }
   }, [chatMessages])
 
-  // Get playmat for both decks
+  // Get playmat for player's own deck (uses local player's context correctly)
   const myPlaymat = myDeck ? getPlaymatForDeck(myDeck) : null
-  const opponentPlaymat = opponentDeck ? getPlaymatForDeck(opponentDeck) : null
-
-  // Debug logs for playmats
-  console.log("[v0] My Deck:", myDeck?.name)
-  console.log("[v0] My Playmat:", myPlaymat?.name, myPlaymat?.image)
-  console.log("[v0] Opponent Deck:", opponentDeck?.name)
-  console.log("[v0] Opponent Playmat:", opponentPlaymat?.name, opponentPlaymat?.image)
+  // For opponent's playmat: use the playmatImage embedded in their serialized deck if available,
+  // otherwise try getPlaymatForDeck as fallback (won't work if the opponent has playmats the local player doesn't own)
+  const opponentPlaymat = opponentDeck
+    ? (opponentDeck as any).playmatImage
+      ? { name: "Opponent Playmat", image: (opponentDeck as any).playmatImage }
+      : getPlaymatForDeck(opponentDeck)
+    : null
 
   // Game result screen
   if (gameResult) {

@@ -51,7 +51,7 @@ type LobbyScreen = "choice" | "create" | "join" | "waiting" | "lobby"
 
 export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps) {
   const { t } = useLanguage()
-  const { decks, playerProfile, playerId } = useGame()
+  const { decks, playerProfile, playerId, getPlaymatForDeck } = useGame()
   const supabase = createClient()
   
   const [screen, setScreen] = useState<LobbyScreen>("choice")
@@ -100,40 +100,37 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         ? playerId
         : crypto.randomUUID()
       
-      console.log("[v0] Creating room...")
-      console.log("[v0] Supabase URL:", process.env.NEXT_PUBLIC_SUPABASE_URL ? "SET" : "NOT SET")
-      console.log("[v0] Room code:", code)
-      console.log("[v0] Host UUID:", hostUUID)
-      console.log("[v0] Host name:", playerProfile.name)
-      
+      // Resolve the playmat image and embed it into the serialized deck
+      // so the opponent can display the correct playmat without needing our local playmat collection
+      const deckToSerialize = selectedDeck
+        ? (() => {
+            const playmat = getPlaymatForDeck(selectedDeck)
+            return { ...selectedDeck, playmatImage: playmat?.image || null }
+          })()
+        : null
+
       const insertPayload = {
         room_code: code,
         host_id: hostUUID,
         host_name: playerProfile.name || "Jogador",
-        host_deck: selectedDeck ? JSON.stringify(selectedDeck) : null,
+        host_deck: deckToSerialize ? JSON.stringify(deckToSerialize) : null,
         status: "waiting",
         host_ready: false,
         guest_ready: false,
       }
-      console.log("[v0] Insert payload:", JSON.stringify(insertPayload, null, 2))
-      
       const { data, error: insertError } = await supabase
         .from("duel_rooms")
         .insert(insertPayload)
         .select()
         .single()
 
-      console.log("[v0] Insert response - data:", data, "error:", insertError)
-
       if (insertError) {
-        console.error("[v0] Error creating room:", JSON.stringify(insertError, null, 2))
         setError(`Erro ao criar sala: ${insertError.message || "Tente novamente."}`)
         setIsLoading(false)
         return
       }
       
       if (!data) {
-        console.error("[v0] No data returned from insert")
         setError("Erro ao criar sala: dados não retornados")
         setIsLoading(false)
         return
@@ -159,7 +156,7 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
       subscribeToRoom(data.id, code)
       
     } catch (err) {
-      console.error("[v0] Exception creating room:", err)
+      console.error("Exception creating room:", err)
       setError(`Erro ao criar sala: ${err instanceof Error ? err.message : "Tente novamente."}`)
     }
     
@@ -205,19 +202,26 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         return
       }
 
+      // Resolve the playmat image and embed it into the serialized deck
+      const guestDeckToSerialize = selectedDeck
+        ? (() => {
+            const playmat = getPlaymatForDeck(selectedDeck)
+            return { ...selectedDeck, playmatImage: playmat?.image || null }
+          })()
+        : null
+
       // Update room with guest info
       const { error: updateError } = await supabase
         .from("duel_rooms")
         .update({
           guest_id: guestUUID,
           guest_name: playerProfile.name || "Jogador",
-          guest_deck: selectedDeck ? JSON.stringify(selectedDeck) : null,
+          guest_deck: guestDeckToSerialize ? JSON.stringify(guestDeckToSerialize) : null,
           status: "lobby",
         })
         .eq("id", room.id)
 
       if (updateError) {
-        console.log("[v0] Error joining room:", updateError)
         setError("Erro ao entrar na sala. Tente novamente.")
         setIsLoading(false)
         return
@@ -264,8 +268,6 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
 
   // Subscribe to room updates
   const subscribeToRoom = useCallback((roomId: string, code: string) => {
-    console.log("[v0] subscribeToRoom called - roomId:", roomId, "code:", code)
-    
     // Clean up existing subscription
     if (roomChannelRef.current) {
       roomChannelRef.current.unsubscribe()
@@ -311,13 +313,6 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
               }
             }
             
-            console.log("[v0] Room update received!")
-            console.log("[v0] - newData.status:", newData.status)
-            console.log("[v0] - newData.guest_id:", newData.guest_id)
-            console.log("[v0] - newData.guest_name:", newData.guest_name)
-            console.log("[v0] - prev.isHost:", prev.isHost)
-            console.log("[v0] - hostDeck:", hostDeck?.name, "guestDeck:", guestDeck?.name)
-            
             const updated: RoomData = {
               ...prev,
               guestId: newData.guest_id,
@@ -329,9 +324,7 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
             }
             
             // If guest joined and we're the host, move to lobby
-            console.log("[v0] Checking if should move to lobby:", prev.isHost, newData.guest_id, newData.status)
             if (prev.isHost && newData.guest_id && newData.status === "lobby") {
-              console.log("[v0] Moving host to lobby screen!")
               setScreen("lobby")
               subscribeToChat(roomId)
             }
@@ -345,9 +338,7 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
           })
         }
       )
-      .subscribe((status) => {
-        console.log("[v0] Room subscription status:", status)
-      })
+      .subscribe()
 
     roomChannelRef.current = channel
   }, [supabase])
@@ -423,10 +414,10 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         })
       
       if (insertError) {
-        console.error("[v0] Error sending message:", insertError)
+        console.error("Error sending message:", insertError)
       }
     } catch (err) {
-      console.error("[v0] Exception sending message:", err)
+        console.error("Exception sending message:", err)
     }
   }
   
