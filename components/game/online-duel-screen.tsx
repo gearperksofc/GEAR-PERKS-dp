@@ -71,7 +71,469 @@ interface ChatMessage {
 interface AttackState {
   isAttacking: boolean
   attackerIndex: number | null
+  attackerSource: "unit" | "ultimate"
   targetInfo?: { type: "unit" | "direct"; index?: number } | null
+}
+
+// ==========================================
+// CENTRALIZED FUNCTION CARD EFFECT SYSTEM (ported from bot mode)
+// ==========================================
+
+interface FunctionCardEffect {
+  id: string
+  name: string
+  requiresTargets: boolean
+  requiresChoice?: boolean
+  requiresDice?: boolean
+  choiceOptions?: { id: string; label: string; description: string }[]
+  targetConfig?: { enemyUnits?: number; allyUnits?: number }
+  needsDrawAfterResolve?: boolean
+  canActivate: (context: PvPEffectContext) => { canActivate: boolean; reason?: string }
+  resolve: (context: PvPEffectContext, targets?: PvPEffectTargets) => PvPEffectResult
+}
+
+interface PvPEffectContext {
+  playerField: FieldState
+  enemyField: FieldState
+  setPlayerField: React.Dispatch<React.SetStateAction<FieldState>>
+  setEnemyField: React.Dispatch<React.SetStateAction<FieldState>>
+}
+
+interface PvPEffectTargets {
+  enemyUnitIndices?: number[]
+  allyUnitIndices?: number[]
+  chosenOption?: string
+  diceResult?: number
+}
+
+interface PvPEffectResult {
+  success: boolean
+  message?: string
+  needsDrawAndCheck?: boolean
+  needsDrawAndCheckUnit?: boolean
+  needsDrawOnly?: boolean
+  currentLife?: number
+  broadcastDamage?: { target: "direct" | "unit"; amount: number; targetIndex?: number; cardName: string }
+}
+
+// Registry of all Function card effects - mirrors bot mode exactly
+const PVP_FUNCTION_CARD_EFFECTS: Record<string, FunctionCardEffect> = {
+  "amplificador-de-poder": {
+    id: "amplificador-de-poder",
+    name: "Amplificador de Poder",
+    requiresTargets: true,
+    targetConfig: { enemyUnits: 1, allyUnits: 1 },
+    canActivate: (context) => {
+      const hasEnemyUnits = context.enemyField.unitZone.some((u) => u !== null)
+      const hasPlayerUnits = context.playerField.unitZone.some((u) => u !== null)
+      if (!hasEnemyUnits) return { canActivate: false, reason: "Nenhuma unidade inimiga no campo" }
+      if (!hasPlayerUnits) return { canActivate: false, reason: "Nenhuma unidade aliada no campo" }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      if (!targets?.enemyUnitIndices?.length || !targets?.allyUnitIndices?.length)
+        return { success: false, message: "Alvos invalidos" }
+      const enemyIndex = targets.enemyUnitIndices[0]
+      const allyIndex = targets.allyUnitIndices[0]
+      const enemyUnit = context.enemyField.unitZone[enemyIndex]
+      const allyUnit = context.playerField.unitZone[allyIndex]
+      if (!enemyUnit || !allyUnit) return { success: false, message: "Unidades nao encontradas" }
+      const dpBonus = enemyUnit.dp
+      const allyCurrentDp = allyUnit.currentDp || allyUnit.dp
+      const newDp = allyCurrentDp + dpBonus
+      context.setPlayerField((prev) => {
+        const newUnitZone = [...prev.unitZone]
+        if (newUnitZone[allyIndex]) newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp }
+        return { ...prev, unitZone: newUnitZone }
+      })
+      return { success: true, message: `+${dpBonus} DP aplicado! (${allyCurrentDp} -> ${newDp})` }
+    },
+  },
+  "bandagem-restauradora": {
+    id: "bandagem-restauradora",
+    name: "Bandagem Restauradora",
+    requiresTargets: false,
+    canActivate: (context) => {
+      if (context.playerField.life >= 20) return { canActivate: false, reason: "LP ja esta no maximo" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentLife = context.playerField.life
+      const healAmount = Math.min(2, 20 - currentLife)
+      const newLife = Math.min(currentLife + healAmount, 20)
+      context.setPlayerField((prev) => ({ ...prev, life: newLife }))
+      return { success: true, message: `+${healAmount} LP restaurado! (${currentLife} -> ${newLife})` }
+    },
+  },
+  "adaga-energizada": {
+    id: "adaga-energizada",
+    name: "Adaga Energizada",
+    requiresTargets: false,
+    canActivate: (context) => {
+      const enemyUnitCount = context.enemyField.unitZone.filter((u) => u !== null).length
+      if (enemyUnitCount < 2) return { canActivate: false, reason: "O oponente precisa ter 2 ou mais unidades" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentEnemyLife = context.enemyField.life
+      const newEnemyLife = Math.max(0, currentEnemyLife - 4)
+      context.setEnemyField((prev) => ({ ...prev, life: newEnemyLife }))
+      return { success: true, message: `4 de dano direto! LP: ${currentEnemyLife} -> ${newEnemyLife}`, broadcastDamage: { target: "direct", amount: 4, cardName: "Adaga Energizada" } }
+    },
+  },
+  "bandagens-duplas": {
+    id: "bandagens-duplas",
+    name: "Bandagens Duplas",
+    requiresTargets: false,
+    canActivate: (context) => {
+      if (context.playerField.life >= 20) return { canActivate: false, reason: "LP ja esta no maximo" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentLife = context.playerField.life
+      const healAmount = Math.min(4, 20 - currentLife)
+      const newLife = Math.min(currentLife + healAmount, 20)
+      context.setPlayerField((prev) => ({ ...prev, life: newLife }))
+      return { success: true, message: `+${healAmount} LP restaurado! (${currentLife} -> ${newLife})` }
+    },
+  },
+  "cristal-recuperador": {
+    id: "cristal-recuperador",
+    name: "Cristal Recuperador",
+    requiresTargets: false,
+    needsDrawAfterResolve: true,
+    canActivate: (context) => {
+      if (context.playerField.life >= 20) return { canActivate: false, reason: "LP ja esta no maximo" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentLife = context.playerField.life
+      const healAmount = Math.min(3, 20 - currentLife)
+      const newLife = Math.min(currentLife + healAmount, 20)
+      context.setPlayerField((prev) => ({ ...prev, life: newLife }))
+      return { success: true, message: `+${healAmount} LP restaurado! (${currentLife} -> ${newLife})`, needsDrawAndCheck: true, currentLife: newLife }
+    },
+  },
+  "cauda-de-dragao-assada": {
+    id: "cauda-de-dragao-assada",
+    name: "Cauda de Dragão Assada",
+    requiresTargets: false,
+    canActivate: (context) => {
+      const playerUnitCount = context.playerField.unitZone.filter((u) => u !== null).length
+      if (playerUnitCount < 2) return { canActivate: false, reason: "Voce precisa ter 2 ou mais unidades" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentLife = context.playerField.life
+      const healAmount = Math.min(2, 20 - currentLife)
+      const newLife = Math.min(currentLife + healAmount, 20)
+      context.setPlayerField((prev) => ({
+        ...prev,
+        life: newLife,
+        unitZone: prev.unitZone.map((unit) => unit === null ? null : { ...unit, currentDp: (unit.currentDp || unit.dp) + 1 }),
+      }))
+      const unitCount = context.playerField.unitZone.filter((u) => u !== null).length
+      const healMsg = healAmount > 0 ? ` +${healAmount} LP` : ""
+      return { success: true, message: `+1 DP para ${unitCount} unidades!${healMsg}` }
+    },
+  },
+  "projetil-de-impacto": {
+    id: "projetil-de-impacto",
+    name: "Projetil de Impacto",
+    requiresTargets: false,
+    canActivate: () => ({ canActivate: true }),
+    resolve: (context) => {
+      const currentEnemyLife = context.enemyField.life
+      const newEnemyLife = Math.max(0, currentEnemyLife - 2)
+      context.setEnemyField((prev) => ({ ...prev, life: newEnemyLife }))
+      return { success: true, message: `2 de dano direto! LP: ${currentEnemyLife} -> ${newEnemyLife}`, broadcastDamage: { target: "direct", amount: 2, cardName: "Projetil de Impacto" } }
+    },
+  },
+  "veu-dos-lacos-cruzados": {
+    id: "veu-dos-lacos-cruzados",
+    name: "Veu dos Lacos Cruzados",
+    requiresTargets: true,
+    requiresChoice: true,
+    choiceOptions: [
+      { id: "buff", label: "+2 DP em Fehnon/Jaden", description: "Adiciona 2 DP a uma unidade Fehnon Hoskie ou Jaden Hainaegi sua" },
+      { id: "debuff", label: "-2 DP em inimigo", description: "Reduz 2 DP de uma unidade do oponente" },
+    ],
+    targetConfig: { allyUnits: 1 },
+    canActivate: (context) => {
+      const hasRequiredUnit = context.playerField.unitZone.some((u) => u !== null && (u.name === "Fehnon Hoskie" || u.name === "Jaden Hainaegi"))
+      if (!hasRequiredUnit) return { canActivate: false, reason: "Voce precisa ter Fehnon Hoskie ou Jaden Hainaegi no campo" }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      const chosenOption = targets?.chosenOption
+      if (chosenOption === "buff") {
+        if (!targets?.allyUnitIndices?.length) return { success: false, message: "Selecione uma unidade Fehnon ou Jaden" }
+        const allyIndex = targets.allyUnitIndices[0]
+        const allyUnit = context.playerField.unitZone[allyIndex]
+        if (!allyUnit || (allyUnit.name !== "Fehnon Hoskie" && allyUnit.name !== "Jaden Hainaegi"))
+          return { success: false, message: "Selecione Fehnon Hoskie ou Jaden Hainaegi" }
+        const currentDp = allyUnit.currentDp || allyUnit.dp
+        const newDp = currentDp + 2
+        context.setPlayerField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          if (newUnitZone[allyIndex]) newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp }
+          return { ...prev, unitZone: newUnitZone }
+        })
+        return { success: true, message: `${allyUnit.name} recebeu +2 DP! (${currentDp} -> ${newDp})` }
+      } else if (chosenOption === "debuff") {
+        if (!targets?.enemyUnitIndices?.length) return { success: false, message: "Selecione uma unidade inimiga" }
+        const enemyIndex = targets.enemyUnitIndices[0]
+        const enemyUnit = context.enemyField.unitZone[enemyIndex]
+        if (!enemyUnit) return { success: false, message: "Unidade inimiga nao encontrada" }
+        const currentDp = enemyUnit.currentDp || enemyUnit.dp
+        const newDp = Math.max(0, currentDp - 2)
+        context.setEnemyField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          if (newUnitZone[enemyIndex]) newUnitZone[enemyIndex] = { ...newUnitZone[enemyIndex]!, currentDp: newDp }
+          return { ...prev, unitZone: newUnitZone }
+        })
+        return { success: true, message: `${enemyUnit.name} perdeu 2 DP! (${currentDp} -> ${newDp})`, broadcastDamage: { target: "unit", amount: 2, targetIndex: enemyIndex, cardName: "Veu dos Lacos Cruzados" } }
+      }
+      return { success: false, message: "Escolha uma opcao" }
+    },
+  },
+  "nucleo-explosivo": {
+    id: "nucleo-explosivo",
+    name: "Nucleo Explosivo",
+    requiresTargets: false,
+    canActivate: (context) => {
+      if (context.enemyField.unitZone.filter((u) => u !== null).length === 0)
+        return { canActivate: false, reason: "O oponente precisa ter ao menos 1 unidade" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      let unitsHit = 0
+      context.setEnemyField((prev) => ({
+        ...prev,
+        unitZone: prev.unitZone.map((unit) => {
+          if (unit === null) return null
+          unitsHit++
+          return { ...unit, currentDp: Math.max(0, (unit.currentDp || unit.dp) - 1) }
+        }),
+      }))
+      return { success: true, message: `1 de dano em ${unitsHit} unidade(s) inimigas!` }
+    },
+  },
+  "kit-medico-improvisado": {
+    id: "kit-medico-improvisado",
+    name: "Kit Medico Improvisado",
+    requiresTargets: false,
+    needsDrawAfterResolve: true,
+    canActivate: (context) => {
+      if (context.playerField.life >= 20) return { canActivate: false, reason: "LP ja esta no maximo" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentLife = context.playerField.life
+      const healAmount = Math.min(2, 20 - currentLife)
+      const newLife = Math.min(currentLife + healAmount, 20)
+      context.setPlayerField((prev) => ({ ...prev, life: newLife }))
+      return { success: true, message: `+${healAmount} LP restaurado! (${currentLife} -> ${newLife})`, needsDrawAndCheckUnit: true, currentLife: newLife }
+    },
+  },
+  "soro-recuperador": {
+    id: "soro-recuperador",
+    name: "Soro Recuperador",
+    requiresTargets: false,
+    needsDrawAfterResolve: true,
+    canActivate: (context) => {
+      if (context.playerField.life >= 20) return { canActivate: false, reason: "LP ja esta no maximo" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentLife = context.playerField.life
+      const healAmount = Math.min(3, 20 - currentLife)
+      const newLife = Math.min(currentLife + healAmount, 20)
+      context.setPlayerField((prev) => ({ ...prev, life: newLife }))
+      return { success: true, message: `+${healAmount} LP restaurado! (${currentLife} -> ${newLife})`, needsDrawOnly: true, currentLife: newLife }
+    },
+  },
+  "ordem-de-laceracao": {
+    id: "ordem-de-laceracao",
+    name: "Ordem de Laceracao",
+    requiresTargets: false,
+    canActivate: (context) => {
+      const hasFehnon = context.playerField.unitZone.some((u) => u !== null && u.name === "Fehnon Hoskie")
+      if (!hasFehnon) return { canActivate: false, reason: "Voce precisa ter Fehnon Hoskie no campo" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentEnemyLife = context.enemyField.life
+      const newEnemyLife = Math.max(0, currentEnemyLife - 3)
+      context.setEnemyField((prev) => ({ ...prev, life: newEnemyLife }))
+      return { success: true, message: `3 de dano direto! LP: ${currentEnemyLife} -> ${newEnemyLife}`, broadcastDamage: { target: "direct", amount: 3, cardName: "Ordem de Laceracao" } }
+    },
+  },
+  "sinfonia-relampago": {
+    id: "sinfonia-relampago",
+    name: "Sinfonia Relampago",
+    requiresTargets: false,
+    canActivate: (context) => {
+      const hasMorgana = context.playerField.unitZone.some((u) => u !== null && u.name === "Morgana Pendragon")
+      if (!hasMorgana) return { canActivate: false, reason: "Voce precisa ter Morgana Pendragon no campo" }
+      return { canActivate: true }
+    },
+    resolve: (context) => {
+      const currentEnemyLife = context.enemyField.life
+      const newEnemyLife = Math.max(0, currentEnemyLife - 4)
+      context.setEnemyField((prev) => ({ ...prev, life: newEnemyLife }))
+      return { success: true, message: `4 de dano direto! LP: ${currentEnemyLife} -> ${newEnemyLife}`, broadcastDamage: { target: "direct", amount: 4, cardName: "Sinfonia Relampago" } }
+    },
+  },
+  "fafnisbani": {
+    id: "fafnisbani",
+    name: "Fafnisbani",
+    requiresTargets: true,
+    requiresChoice: true,
+    choiceOptions: [
+      { id: "unit", label: "Atacar Unidade", description: "Causa 3 de dano a uma unidade inimiga" },
+      { id: "lp", label: "Atacar LP", description: "Causa 3 de dano direto ao LP do oponente" },
+    ],
+    canActivate: (context) => {
+      const hasHrotti = context.playerField.unitZone.some((u) => u !== null && (u.name === "Scandinavian Angel Hrotti" || u.name?.toLowerCase().includes("hrotti")))
+      if (!hasHrotti) return { canActivate: false, reason: "Voce precisa ter Scandinavian Angel Hrotti no campo" }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      const chosenOption = targets?.chosenOption
+      if (chosenOption === "lp") {
+        const currentEnemyLife = context.enemyField.life
+        const newEnemyLife = Math.max(0, currentEnemyLife - 3)
+        context.setEnemyField((prev) => ({ ...prev, life: newEnemyLife }))
+        return { success: true, message: `Fafnisbani! 3 de dano direto! LP: ${currentEnemyLife} -> ${newEnemyLife}`, broadcastDamage: { target: "direct", amount: 3, cardName: "Fafnisbani" } }
+      } else if (chosenOption === "unit") {
+        if (!targets?.enemyUnitIndices?.length) return { success: false, message: "Selecione uma unidade inimiga" }
+        const enemyIndex = targets.enemyUnitIndices[0]
+        const enemyUnit = context.enemyField.unitZone[enemyIndex]
+        if (!enemyUnit) return { success: false, message: "Unidade inimiga nao encontrada" }
+        const currentDp = enemyUnit.currentDp || enemyUnit.dp
+        const newDp = Math.max(0, currentDp - 3)
+        const isDestroyed = newDp <= 0
+        context.setEnemyField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          const newGraveyard = [...prev.graveyard]
+          if (isDestroyed) {
+            if (newUnitZone[enemyIndex]) newGraveyard.push(newUnitZone[enemyIndex]!)
+            newUnitZone[enemyIndex] = null
+          } else {
+            if (newUnitZone[enemyIndex]) newUnitZone[enemyIndex] = { ...newUnitZone[enemyIndex]!, currentDp: newDp }
+          }
+          return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
+        })
+        return { success: true, message: isDestroyed ? `Fafnisbani! ${enemyUnit.name} destruido!` : `Fafnisbani! ${enemyUnit.name} -3 DP (${currentDp} -> ${newDp})`, broadcastDamage: { target: "unit", amount: 3, targetIndex: enemyIndex, cardName: "Fafnisbani" } }
+      }
+      return { success: false, message: "Escolha uma opcao" }
+    },
+  },
+  "devorar-o-mundo": {
+    id: "devorar-o-mundo",
+    name: "Devorar o Mundo",
+    requiresTargets: true,
+    requiresChoice: true,
+    choiceOptions: [
+      { id: "unit", label: "Atacar Unidade", description: "Causa 4 de dano a uma unidade inimiga" },
+      { id: "lp", label: "Atacar LP", description: "Causa 4 de dano direto ao LP do oponente" },
+    ],
+    canActivate: (context) => {
+      const hasLogi = context.playerField.unitZone.some((u) => u !== null && (u.name === "Scandinavian Angel Logi" || u.name?.toLowerCase().includes("logi")))
+      if (!hasLogi) return { canActivate: false, reason: "Voce precisa ter Scandinavian Angel Logi no campo" }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      const chosenOption = targets?.chosenOption
+      if (chosenOption === "lp") {
+        const currentEnemyLife = context.enemyField.life
+        const newEnemyLife = Math.max(0, currentEnemyLife - 4)
+        context.setEnemyField((prev) => ({ ...prev, life: newEnemyLife }))
+        return { success: true, message: `Devorar o Mundo! 4 de dano direto! LP: ${currentEnemyLife} -> ${newEnemyLife}`, broadcastDamage: { target: "direct", amount: 4, cardName: "Devorar o Mundo" } }
+      } else if (chosenOption === "unit") {
+        if (!targets?.enemyUnitIndices?.length) return { success: false, message: "Selecione uma unidade inimiga" }
+        const enemyIndex = targets.enemyUnitIndices[0]
+        const enemyUnit = context.enemyField.unitZone[enemyIndex]
+        if (!enemyUnit) return { success: false, message: "Unidade inimiga nao encontrada" }
+        const currentDp = enemyUnit.currentDp || enemyUnit.dp
+        const newDp = Math.max(0, currentDp - 4)
+        const isDestroyed = newDp <= 0
+        context.setEnemyField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          const newGraveyard = [...prev.graveyard]
+          if (isDestroyed) {
+            if (newUnitZone[enemyIndex]) newGraveyard.push(newUnitZone[enemyIndex]!)
+            newUnitZone[enemyIndex] = null
+          } else {
+            if (newUnitZone[enemyIndex]) newUnitZone[enemyIndex] = { ...newUnitZone[enemyIndex]!, currentDp: newDp }
+          }
+          return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
+        })
+        return { success: true, message: isDestroyed ? `Devorar o Mundo! ${enemyUnit.name} destruido!` : `Devorar o Mundo! ${enemyUnit.name} -4 DP (${currentDp} -> ${newDp})`, broadcastDamage: { target: "unit", amount: 4, targetIndex: enemyIndex, cardName: "Devorar o Mundo" } }
+      }
+      return { success: false, message: "Escolha uma opcao" }
+    },
+  },
+  "dados-do-destino-gentil": {
+    id: "dados-do-destino-gentil",
+    name: "Dados do Destino Gentil",
+    requiresTargets: true,
+    requiresDice: true,
+    targetConfig: { allyUnits: 1 },
+    canActivate: (context) => {
+      if (!context.playerField.unitZone.some((u) => u !== null)) return { canActivate: false, reason: "Voce precisa ter uma unidade em campo" }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      if (!targets?.allyUnitIndices?.length) return { success: false, message: "Selecione uma unidade sua" }
+      const allyIndex = targets.allyUnitIndices[0]
+      const allyUnit = context.playerField.unitZone[allyIndex]
+      if (!allyUnit) return { success: false, message: "Unidade nao encontrada" }
+      const diceResult = targets.diceResult || 1
+      const currentDp = allyUnit.currentDp || allyUnit.dp
+      if (diceResult >= 1 && diceResult <= 3) {
+        const newDp = Math.max(0, currentDp - 3)
+        const isDestroyed = newDp <= 0
+        context.setPlayerField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          const newGraveyard = [...prev.graveyard]
+          if (isDestroyed) { if (newUnitZone[allyIndex]) newGraveyard.push(newUnitZone[allyIndex]!); newUnitZone[allyIndex] = null }
+          else { if (newUnitZone[allyIndex]) newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp } }
+          return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
+        })
+        return { success: true, message: isDestroyed ? `Dado: ${diceResult}! ${allyUnit.name} destruida!` : `Dado: ${diceResult}! ${allyUnit.name} -3 DP (${currentDp} -> ${newDp})` }
+      } else {
+        const newDp = currentDp + 5
+        context.setPlayerField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          if (newUnitZone[allyIndex]) newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp }
+          return { ...prev, unitZone: newUnitZone }
+        })
+        return { success: true, message: `Dado: ${diceResult}! ${allyUnit.name} +5 DP! (${currentDp} -> ${newDp})` }
+      }
+    },
+  },
+}
+
+// Helper: extract base card ID
+const getBaseCardIdPvP = (cardId: string): string => {
+  const deckSuffixIndex = cardId.lastIndexOf("-deck-")
+  if (deckSuffixIndex !== -1) return cardId.substring(0, deckSuffixIndex)
+  return cardId.replace(/-\d{13,}$/, "")
+}
+
+// Helper: get effect for a card by ID or name (with accent-insensitive fallback)
+const getPvPFunctionCardEffect = (card: { id: string; name?: string }): FunctionCardEffect | null => {
+  const baseId = getBaseCardIdPvP(card.id)
+  if (PVP_FUNCTION_CARD_EFFECTS[baseId]) return PVP_FUNCTION_CARD_EFFECTS[baseId]
+  // Fallback: match by name (accent-insensitive)
+  const normalize = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+  const cardNameNorm = normalize(card.name || "")
+  const effectByName = Object.values(PVP_FUNCTION_CARD_EFFECTS).find(
+    (effect) => normalize(effect.name) === cardNameNorm
+  )
+  return effectByName || null
 }
 
 const shuffleArray = <T,>(array: T[]): T[] => {
@@ -170,6 +632,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   const [attackState, setAttackState] = useState<AttackState>({
     isAttacking: false,
     attackerIndex: null,
+    attackerSource: "unit",
     targetInfo: null,
   })
   const [attackTarget, setAttackTarget] = useState<{ type: "direct" | "unit"; index?: number } | null>(null)
@@ -186,7 +649,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     card: GameCard
     currentY?: number
   } | null>(null)
-  const [dropTarget, setDropTarget] = useState<{ type: "unit" | "function" | "scenario"; index: number } | null>(null)
+  const [dropTarget, setDropTarget] = useState<{ type: "unit" | "function" | "scenario" | "ultimate"; index: number } | null>(null)
 
   // Attack arrow state
   const [arrowPos, setArrowPos] = useState({ x1: 0, y1: 0, x2: 0, y2: 0 })
@@ -218,10 +681,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   const [itemSelectionMode, setItemSelectionMode] = useState<{
     active: boolean
     itemCard: GameCard | null
-    step: "selectEnemy" | "selectAlly"
+    effect: FunctionCardEffect | null
+    step: "choice" | "dice" | "selectEnemy" | "selectAlly"
     selectedEnemyIndex: number | null
+    selectedAllyIndex: number | null
+    chosenOption: string | null
+    diceResult: number | null
     handIndex: number | null
-  }>({ active: false, itemCard: null, step: "selectEnemy", selectedEnemyIndex: null, handIndex: null })
+  }>({ active: false, itemCard: null, effect: null, step: "selectEnemy", selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: null })
 
   // Draw card animation state
   const [drawAnimation, setDrawAnimation] = useState<{
@@ -611,6 +1078,8 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   const turnRef = useRef(turn)
   const sendActionRef = useRef(sendAction)
   const playerIdRef = useRef(playerId)
+  const attackStateRef = useRef(attackState)
+  const attackTargetRef = useRef(attackTarget)
   
   // Keep refs in sync
   useEffect(() => {
@@ -648,6 +1117,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   useEffect(() => {
     playerIdRef.current = playerId
   }, [playerId])
+  
+  useEffect(() => {
+    attackStateRef.current = attackState
+  }, [attackState])
+  
+  useEffect(() => {
+    attackTargetRef.current = attackTarget
+  }, [attackTarget])
 
   useEffect(() => {
     const handleGlobalMove = (e: MouseEvent | TouchEvent) => {
@@ -846,6 +1323,120 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     }
   }, [])
 
+  // Global attack arrow listeners for smoother drag experience
+  useEffect(() => {
+    const handleGlobalAttackMove = (e: MouseEvent | TouchEvent) => {
+      const currentAttack = attackStateRef.current
+      if (!currentAttack.isAttacking) return
+
+      e.preventDefault()
+
+      const clientX = "touches" in e ? e.touches[0].clientX : (e as MouseEvent).clientX
+      const clientY = "touches" in e ? e.touches[0].clientY : (e as MouseEvent).clientY
+
+      positionRef.current.currentX = clientX
+      positionRef.current.currentY = clientY
+
+      setArrowPos((prev) => ({
+        ...prev,
+        x2: clientX,
+        y2: clientY,
+      }))
+
+      // Check for targets under the pointer
+      const elements = document.elementsFromPoint(clientX, clientY)
+      let newTarget: { type: "direct" | "unit"; index?: number } | null = null
+
+      for (const el of elements) {
+        const enemyUnit = el.closest("[data-enemy-unit]")
+        if (enemyUnit) {
+          const index = Number.parseInt(enemyUnit.getAttribute("data-enemy-unit") || "-1", 10)
+          if (index >= 0 && opponentFieldRef.current.unitZone[index]) {
+            newTarget = { type: "unit", index }
+            break
+          }
+        }
+        if (el.closest("[data-direct-attack]")) {
+          newTarget = { type: "direct" }
+          break
+        }
+      }
+
+      // Auto-target direct attack if opponent has no units
+      if (!newTarget) {
+        const hasEnemyUnits = opponentFieldRef.current.unitZone.some((u) => u !== null)
+        if (!hasEnemyUnits) {
+          newTarget = { type: "direct" }
+        }
+      }
+
+      setAttackTarget(newTarget)
+    }
+
+    const handleGlobalAttackEnd = () => {
+      const currentAttack = attackStateRef.current
+      if (!currentAttack.isAttacking || currentAttack.attackerIndex === null) return
+
+      const currentTarget = attackTargetRef.current
+      if (currentTarget) {
+        // We need to call performAttack but it reads from attackState which is stale
+        // Instead, dispatch via a custom event that the component picks up
+        // Or simply call the handlers inline
+        setAttackState((prev) => {
+          // Trigger attack resolution in next render cycle
+          return prev
+        })
+      }
+      // The actual end handling happens via handleAttackEnd called from onMouseUp/onTouchEnd
+    }
+
+    // Global end handlers so releasing anywhere works
+    const handleGlobalAttackEndMouse = () => {
+      const currentAttack = attackStateRef.current
+      if (!currentAttack.isAttacking) return
+      // Delegate to React state via a flag
+      setAttackState((prev) => {
+        if (!prev.isAttacking) return prev
+        return { ...prev, isAttacking: false } // Will be caught by the effect below
+      })
+    }
+
+    const handleGlobalAttackEndTouch = () => {
+      const currentAttack = attackStateRef.current
+      if (!currentAttack.isAttacking) return
+      setAttackState((prev) => {
+        if (!prev.isAttacking) return prev
+        return { ...prev, isAttacking: false }
+      })
+    }
+
+    window.addEventListener("mousemove", handleGlobalAttackMove, { passive: false })
+    window.addEventListener("touchmove", handleGlobalAttackMove, { passive: false })
+    window.addEventListener("mouseup", handleGlobalAttackEndMouse)
+    window.addEventListener("touchend", handleGlobalAttackEndTouch)
+
+    return () => {
+      window.removeEventListener("mousemove", handleGlobalAttackMove)
+      window.removeEventListener("touchmove", handleGlobalAttackMove)
+      window.removeEventListener("mouseup", handleGlobalAttackEndMouse)
+      window.removeEventListener("touchend", handleGlobalAttackEndTouch)
+    }
+  }, [])
+
+  // Effect to resolve attack when attackState transitions from isAttacking=true to false
+  const prevAttackingRef = useRef(false)
+  useEffect(() => {
+    if (prevAttackingRef.current && !attackState.isAttacking && attackState.attackerIndex !== null) {
+      // Attack just ended - resolve
+      if (attackTargetRef.current) {
+        performAttack(attackTargetRef.current.type, attackTargetRef.current.index)
+      }
+      setAttackState({ isAttacking: false, attackerIndex: null, attackerSource: "unit", targetInfo: null })
+      setAttackTarget(null)
+    }
+    prevAttackingRef.current = attackState.isAttacking
+  }, [attackState.isAttacking])
+
   // Card inspection handlers
   const handleCardPressStart = (card: GameCard) => {
     if (cardPressTimer.current) {
@@ -868,186 +1459,166 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     return isMyTurn && phase === "battle" && card.canAttack && !card.hasAttacked && turn > card.canAttackTurn
   }
 
-  // Helper to extract base card ID (removes deck timestamp suffix)
-  const getBaseCardId = (cardId: string): string => {
-    return cardId.replace(/-\d{13,}$/, "")
-  }
-
-  // Simple effect resolution for PvP function/item cards
-  // Resolves the effect using the selected targets and updates fields accordingly
-  const resolveCardEffect = useCallback((
+  // Resolve effect with the centralized system
+  const resolveFullEffect = useCallback((
     card: GameCard,
-    allyIndex: number,
-    enemyIndex: number | null,
+    effect: FunctionCardEffect,
+    targets: PvPEffectTargets,
   ) => {
-    const baseId = getBaseCardId(card.id || "")
-    const cardName = card.name
-
-    // Effect context references
-    const allyUnit = myField.unitZone[allyIndex]
-    if (!allyUnit) {
-      showEffectFeedback(`${cardName}: Unidade aliada nao encontrada`, "error")
-      return
+    const context: PvPEffectContext = {
+      playerField: myFieldRef.current,
+      enemyField: opponentFieldRef.current,
+      setPlayerField: setMyField,
+      setEnemyField: setOpponentField,
     }
-    const allyDp = allyUnit.currentDp || allyUnit.dp
+    const result = effect.resolve(context, targets)
 
-    // Common effect patterns based on card name / ID
-    // Buff cards (add DP to ally)
-    const buffEffects: Record<string, number> = {
-      "Amplificador de Poder": 3,
-      "Adaga Energizada": 2,
-      "Cauda de Dragao Assada": 2,
-      "Cauda de Dragão Assada": 2,
-    }
+    if (result.success) {
+      showEffectFeedback(`${card.name}: ${result.message}`, "success")
 
-    // Heal cards (restore DP to ally)
-    const healEffects: Record<string, number> = {
-      "Bandagem Restauradora": 2,
-      "Bandagens Duplas": 4,
-      "Cristal Recuperador": 3,
-      "Kit Medico Improvisado": 2,
-      "Kit Médico Improvisado": 2,
-      "Soro Recuperador": 3,
-    }
-
-    // Damage cards (deal damage to enemy unit)
-    const damageEffects: Record<string, number> = {
-      "Projetil de Impacto": 3,
-      "Projétil de Impacto": 3,
-      "Nucleo Explosivo": 4,
-      "Núcleo Explosivo": 4,
-      "Ordem de Laceracao": 2,
-      "Ordem de Laceração": 2,
-      "Sinfonia Relampago": 3,
-      "Sinfonia Relâmpago": 3,
-      "Fafnisbani": 5,
-      "Devorar o Mundo": 3,
-    }
-
-    let effectApplied = false
-
-    // Check buff effects
-    if (buffEffects[cardName]) {
-      const bonus = buffEffects[cardName]
-      setMyField((prev) => {
-        const newUnitZone = [...prev.unitZone]
-        const unit = newUnitZone[allyIndex]
-        if (unit) {
-          newUnitZone[allyIndex] = { ...unit, currentDp: unit.currentDp + bonus }
-        }
-        return { ...prev, unitZone: newUnitZone }
-      })
-      showEffectFeedback(`${cardName}: ${allyUnit.name} +${bonus} DP!`, "success")
-      effectApplied = true
-    }
-
-    // Check heal effects
-    if (!effectApplied && healEffects[cardName]) {
-      const heal = healEffects[cardName]
-      setMyField((prev) => {
-        const newUnitZone = [...prev.unitZone]
-        const unit = newUnitZone[allyIndex]
-        if (unit) {
-          const newDp = Math.min(unit.currentDp + heal, unit.dp + 5) // Cap at base + 5
-          newUnitZone[allyIndex] = { ...unit, currentDp: newDp }
-        }
-        return { ...prev, unitZone: newUnitZone }
-      })
-      showEffectFeedback(`${cardName}: ${allyUnit.name} restaurou ${heal} DP!`, "success")
-      effectApplied = true
-    }
-
-    // Check damage effects (requires enemy target)
-    if (!effectApplied && damageEffects[cardName] && enemyIndex !== null) {
-      const damage = damageEffects[cardName]
-      const enemyUnit = opponentField.unitZone[enemyIndex]
-      if (enemyUnit) {
-        setOpponentField((prev) => {
-          const newUnitZone = [...prev.unitZone]
-          const newGraveyard = [...prev.graveyard]
-          const target = newUnitZone[enemyIndex]
-          if (target) {
-            const newDp = target.currentDp - damage
-            if (newDp <= 0) {
-              newGraveyard.push({ ...target, currentDp: 0 })
-              newUnitZone[enemyIndex] = null
-            } else {
-              newUnitZone[enemyIndex] = { ...target, currentDp: newDp }
-            }
-          }
-          return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
-        })
-        showEffectFeedback(`${cardName}: ${enemyUnit.name} recebeu -${damage} DP!`, "success")
-
-        // Broadcast effect to opponent
-        sendAction({
+      // Broadcast damage effects to opponent
+      if (result.broadcastDamage) {
+        sendActionRef.current({
           type: "damage",
-          playerId,
-          data: { target: "unit", targetIndex: enemyIndex, amount: damage, cardName },
+          playerId: playerIdRef.current,
+          data: result.broadcastDamage,
           timestamp: Date.now(),
         })
-        effectApplied = true
+      }
+
+      // Handle draw-after-resolve effects
+      if (effect.needsDrawAfterResolve) {
+        setMyField((prev) => {
+          if (prev.deck.length === 0) return prev
+          const drawnCard = prev.deck[0]
+          return { ...prev, hand: [...prev.hand, drawnCard], deck: prev.deck.slice(1) }
+        })
+      }
+
+      // Move card to graveyard
+      setMyField((prev) => ({ ...prev, graveyard: [...prev.graveyard, card] }))
+
+      // Broadcast effect activation to opponent
+      sendActionRef.current({
+        type: "place_card",
+        playerId: playerIdRef.current,
+        data: { zone: "function", index: -1, card, effect: true },
+        timestamp: Date.now(),
+      })
+    } else {
+      showEffectFeedback(`${card.name}: ${result.message}`, "error")
+      // Return card to hand on failure
+      if (itemSelectionMode.handIndex !== null) {
+        setMyField((prev) => {
+          const newHand = [...prev.hand]
+          newHand.splice(itemSelectionMode.handIndex!, 0, card)
+          return { ...prev, hand: newHand }
+        })
       }
     }
 
-    // Fallback: generic +2 DP buff if no specific effect matched
-    if (!effectApplied) {
-      setMyField((prev) => {
-        const newUnitZone = [...prev.unitZone]
-        const unit = newUnitZone[allyIndex]
-        if (unit) {
-          newUnitZone[allyIndex] = { ...unit, currentDp: unit.currentDp + 2 }
-        }
-        return { ...prev, unitZone: newUnitZone }
-      })
-      showEffectFeedback(`${cardName}: ${allyUnit.name} +2 DP!`, "success")
+    // Reset selection mode
+    resetItemSelectionMode()
+  }, [showEffectFeedback])
+
+  const resetItemSelectionMode = useCallback(() => {
+    setItemSelectionMode({ active: false, itemCard: null, effect: null, step: "selectEnemy", selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: null })
+  }, [])
+
+  // Handle choice selection (for choice-based effects like Fafnisbani, Veu dos Lacos)
+  const handleChoiceSelect = (choiceId: string) => {
+    if (!itemSelectionMode.active || itemSelectionMode.step !== "choice") return
+    const effect = itemSelectionMode.effect
+    if (!effect) return
+
+    setItemSelectionMode((prev) => ({ ...prev, chosenOption: choiceId }))
+
+    // Determine next step based on chosen option and effect config
+    const needsEnemyTarget = effect.targetConfig?.enemyUnits && effect.targetConfig.enemyUnits > 0
+    const needsAllyTarget = effect.targetConfig?.allyUnits && effect.targetConfig.allyUnits > 0
+    const hasEnemyUnits = opponentFieldRef.current.unitZone.some((u) => u !== null)
+    const hasAllyUnits = myFieldRef.current.unitZone.some((u) => u !== null)
+
+    // For effects that damage enemies ("unit" option in Fafnisbani/Devorar)
+    if (choiceId === "unit" && hasEnemyUnits) {
+      setItemSelectionMode((prev) => ({ ...prev, chosenOption: choiceId, step: "selectEnemy" }))
+      return
+    }
+    // For buff effects that target allies ("buff" option in Veu dos Lacos)
+    if (choiceId === "buff" && hasAllyUnits) {
+      setItemSelectionMode((prev) => ({ ...prev, chosenOption: choiceId, step: "selectAlly" }))
+      return
+    }
+    // For debuff option targeting enemies
+    if (choiceId === "debuff" && hasEnemyUnits) {
+      setItemSelectionMode((prev) => ({ ...prev, chosenOption: choiceId, step: "selectEnemy" }))
+      return
     }
 
-    // Move card to graveyard
-    setMyField((prev) => ({
-      ...prev,
-      graveyard: [...prev.graveyard, card],
-    }))
+    // If "lp" option or no targets needed, resolve immediately
+    if (itemSelectionMode.itemCard && effect) {
+      resolveFullEffect(itemSelectionMode.itemCard, effect, { chosenOption: choiceId })
+    }
+  }
 
-    // Broadcast effect to opponent
-    sendAction({
-      type: "place_card",
-      playerId,
-      data: { zone: "function", index: -1, card, effect: true },
-      timestamp: Date.now(),
-    })
-  }, [myField, opponentField, sendAction, playerId, showEffectFeedback])
+  // Handle dice roll (for dice-based effects)
+  const handleDiceRoll = () => {
+    if (!itemSelectionMode.active || itemSelectionMode.step !== "dice") return
+    const diceResult = Math.floor(Math.random() * 6) + 1
+    setItemSelectionMode((prev) => ({ ...prev, diceResult }))
+
+    // After rolling, determine next step
+    const effect = itemSelectionMode.effect
+    if (!effect) return
+
+    const needsAllyTarget = effect.targetConfig?.allyUnits && effect.targetConfig.allyUnits > 0
+    if (needsAllyTarget) {
+      setTimeout(() => {
+        setItemSelectionMode((prev) => ({ ...prev, step: "selectAlly" }))
+      }, 1000) // Show dice result for a moment before proceeding
+    } else if (itemSelectionMode.itemCard && effect) {
+      setTimeout(() => {
+        resolveFullEffect(itemSelectionMode.itemCard!, effect, { diceResult })
+      }, 1000)
+    }
+  }
 
   // Handle enemy unit selection for item targeting
   const handleEnemyUnitSelect = (index: number) => {
     if (!itemSelectionMode.active || itemSelectionMode.step !== "selectEnemy") return
-    if (!opponentField.unitZone[index]) return
+    if (!opponentFieldRef.current.unitZone[index]) return
 
-    setItemSelectionMode((prev) => ({
-      ...prev,
-      selectedEnemyIndex: index,
-      step: "selectAlly",
-    }))
+    const effect = itemSelectionMode.effect
+    const needsAllyTarget = effect?.targetConfig?.allyUnits && effect.targetConfig.allyUnits > 0
+
+    if (needsAllyTarget) {
+      setItemSelectionMode((prev) => ({ ...prev, selectedEnemyIndex: index, step: "selectAlly" }))
+    } else if (itemSelectionMode.itemCard && effect) {
+      // Resolve immediately with just enemy target
+      resolveFullEffect(itemSelectionMode.itemCard, effect, {
+        enemyUnitIndices: [index],
+        chosenOption: itemSelectionMode.chosenOption || undefined,
+        diceResult: itemSelectionMode.diceResult || undefined,
+      })
+    }
   }
 
   // Handle ally unit selection for item targeting
   const handleAllyUnitSelect = (index: number) => {
     if (!itemSelectionMode.active || itemSelectionMode.step !== "selectAlly") return
-    if (!myField.unitZone[index]) return
-    if (!itemSelectionMode.itemCard) return
+    if (!myFieldRef.current.unitZone[index]) return
+    if (!itemSelectionMode.itemCard || !itemSelectionMode.effect) return
 
-    resolveCardEffect(
-      itemSelectionMode.itemCard,
-      index,
-      itemSelectionMode.selectedEnemyIndex,
-    )
-
-    setItemSelectionMode({ active: false, itemCard: null, step: "selectEnemy", selectedEnemyIndex: null, handIndex: null })
+    resolveFullEffect(itemSelectionMode.itemCard, itemSelectionMode.effect, {
+      enemyUnitIndices: itemSelectionMode.selectedEnemyIndex !== null ? [itemSelectionMode.selectedEnemyIndex] : undefined,
+      allyUnitIndices: [index],
+      chosenOption: itemSelectionMode.chosenOption || undefined,
+      diceResult: itemSelectionMode.diceResult || undefined,
+    })
   }
 
   // Cancel item selection
   const cancelItemSelection = () => {
-    // Return card to hand if it was removed
     if (itemSelectionMode.itemCard && itemSelectionMode.handIndex !== null) {
       setMyField((prev) => {
         const newHand = [...prev.hand]
@@ -1055,36 +1626,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         return { ...prev, hand: newHand }
       })
     }
-    setItemSelectionMode({ active: false, itemCard: null, step: "selectEnemy", selectedEnemyIndex: null, handIndex: null })
+    resetItemSelectionMode()
   }
 
-  // Check if a card has an activatable effect (item or function type with known effect)
+  // Check if a card has an activatable effect
   const cardHasEffect = (card: GameCard): boolean => {
-    if (card.type !== "item" && card.type !== "function") return false
     if (card.type === "scenario") return false
-    // Check if card name matches any known effect
-    const knownEffects = [
-      "Amplificador de Poder", "Bandagem Restauradora", "Adaga Energizada",
-      "Bandagens Duplas", "Cristal Recuperador", "Cauda de Dragao Assada", "Cauda de Dragão Assada",
-      "Projetil de Impacto", "Projétil de Impacto", "Nucleo Explosivo", "Núcleo Explosivo",
-      "Kit Medico Improvisado", "Kit Médico Improvisado", "Soro Recuperador",
-      "Ordem de Laceracao", "Ordem de Laceração", "Sinfonia Relampago", "Sinfonia Relâmpago",
-      "Fafnisbani", "Devorar o Mundo",
-      "Véu dos Laços Cruzados", "Veu dos Lacos Cruzados",
-    ]
-    return knownEffects.includes(card.name)
-  }
-
-  // Determine if an effect card needs an enemy target
-  const effectNeedsEnemy = (card: GameCard): boolean => {
-    const damageCards = [
-      "Projetil de Impacto", "Projétil de Impacto",
-      "Nucleo Explosivo", "Núcleo Explosivo",
-      "Ordem de Laceracao", "Ordem de Laceração",
-      "Sinfonia Relampago", "Sinfonia Relâmpago",
-      "Fafnisbani", "Devorar o Mundo",
-    ]
-    return damageCards.includes(card.name)
+    if (isUnitCard(card)) return false
+    return getPvPFunctionCardEffect(card) !== null
   }
 
   // Draw a card
@@ -1152,51 +1701,64 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     if (card.type === "scenario") return // Scenario cards go to scenario zone only
     if (isUltimateCard(card)) return // Ultimate cards go to ultimate zone only
 
-    // Check if function card has an activatable effect
+    // Check if function card has an activatable effect (uses centralized registry)
     if (zone === "function" && cardHasEffect(card)) {
-      // Remove from hand and enter item selection mode
-      setMyField((prev) => ({
-        ...prev,
-        hand: prev.hand.filter((_, i) => i !== cardIndex),
-      }))
-
-      // Check if we need an enemy target first
-      const needsEnemy = effectNeedsEnemy(card)
-      const hasEnemyUnits = opponentField.unitZone.some((u) => u !== null)
-
-      if (needsEnemy && !hasEnemyUnits) {
-        // Damage card but no enemy units -- deal direct LP damage instead
-        const damageEffects: Record<string, number> = {
-          "Projetil de Impacto": 3, "Projétil de Impacto": 3,
-          "Nucleo Explosivo": 4, "Núcleo Explosivo": 4,
-          "Ordem de Laceracao": 2, "Ordem de Laceração": 2,
-          "Sinfonia Relampago": 3, "Sinfonia Relâmpago": 3,
-          "Fafnisbani": 5, "Devorar o Mundo": 3,
-        }
-        const dmg = damageEffects[card.name] || 2
-        setOpponentField((prev) => ({ ...prev, life: Math.max(0, prev.life - dmg) }))
-        showEffectFeedback(`${card.name}: -${dmg} LP direto!`, "success")
-        setMyField((prev) => ({ ...prev, graveyard: [...prev.graveyard, card] }))
-        sendAction({
-          type: "damage",
-          playerId,
-          data: { target: "direct", amount: dmg, cardName: card.name },
-          timestamp: Date.now(),
+      const effect = getPvPFunctionCardEffect(card)
+      if (effect) {
+        // Check activation conditions
+        const activationCheck = effect.canActivate({
+          playerField: myFieldRef.current,
+          enemyField: opponentFieldRef.current,
+          setPlayerField: setMyField,
+          setEnemyField: setOpponentField,
         })
+        
+        if (!activationCheck.canActivate) {
+          showEffectFeedback(`${card.name}: ${activationCheck.reason}`, "error")
+          setSelectedHandCard(null)
+          return
+        }
+
+        // Remove from hand
+        setMyField((prev) => ({ ...prev, hand: prev.hand.filter((_, i) => i !== cardIndex) }))
+
+        // Determine the first step based on effect requirements
+        if (effect.requiresChoice && effect.choiceOptions) {
+          setItemSelectionMode({
+            active: true, itemCard: card, effect, step: "choice",
+            selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: cardIndex,
+          })
+        } else if (effect.requiresDice) {
+          setItemSelectionMode({
+            active: true, itemCard: card, effect, step: "dice",
+            selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: cardIndex,
+          })
+        } else if (effect.requiresTargets) {
+          const needsEnemy = effect.targetConfig?.enemyUnits && effect.targetConfig.enemyUnits > 0
+          const needsAlly = effect.targetConfig?.allyUnits && effect.targetConfig.allyUnits > 0
+          const hasEnemyUnits = opponentFieldRef.current.unitZone.some((u) => u !== null)
+          
+          if (needsEnemy && hasEnemyUnits) {
+            setItemSelectionMode({
+              active: true, itemCard: card, effect, step: "selectEnemy",
+              selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: cardIndex,
+            })
+          } else if (needsAlly) {
+            setItemSelectionMode({
+              active: true, itemCard: card, effect, step: "selectAlly",
+              selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: cardIndex,
+            })
+          } else {
+            // No valid targets, resolve immediately
+            resolveFullEffect(card, effect, {})
+          }
+        } else {
+          // No targets needed, resolve immediately
+          resolveFullEffect(card, effect, {})
+        }
         setSelectedHandCard(null)
         return
       }
-
-      setItemSelectionMode({
-        active: true,
-        itemCard: card,
-        step: needsEnemy && hasEnemyUnits ? "selectEnemy" : "selectAlly",
-        selectedEnemyIndex: null,
-        handIndex: cardIndex,
-      })
-
-      setSelectedHandCard(null)
-      return
     }
 
     setMyField((prev) => {
@@ -1432,10 +1994,10 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   }
 
   // Attack handlers
-  const handleAttackStart = (unitIndex: number, e: React.MouseEvent | React.TouchEvent) => {
+  const handleAttackStart = (unitIndex: number, e: React.MouseEvent | React.TouchEvent, source: "unit" | "ultimate" = "unit") => {
     if (!isMyTurn || phase !== "battle") return
 
-    const unit = myField.unitZone[unitIndex]
+    const unit = source === "ultimate" ? myField.ultimateZone : myField.unitZone[unitIndex]
     if (!unit || !canUnitAttackNow(unit)) return
 
     const clientX = "touches" in e ? e.touches[0].clientX : e.clientX
@@ -1458,6 +2020,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     setAttackState({
       isAttacking: true,
       attackerIndex: unitIndex,
+      attackerSource: source,
       targetInfo: null,
     })
   }
@@ -1510,7 +2073,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
 
   const handleAttackEnd = () => {
     if (!attackState.isAttacking || attackState.attackerIndex === null) {
-      setAttackState({ isAttacking: false, attackerIndex: null, targetInfo: null })
+      setAttackState({ isAttacking: false, attackerIndex: null, attackerSource: "unit", targetInfo: null })
       setAttackTarget(null)
       return
     }
@@ -1519,22 +2082,51 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       performAttack(attackTarget.type, attackTarget.index)
     }
 
-    setAttackState({ isAttacking: false, attackerIndex: null, targetInfo: null })
+    setAttackState({ isAttacking: false, attackerIndex: null, attackerSource: "unit", targetInfo: null })
     setAttackTarget(null)
   }
 
-  // Perform attack
+  // Perform attack - supports both unit zone and ultimate zone attackers
   const performAttack = (targetType: "direct" | "unit", targetIndex?: number) => {
     if (!isMyTurn || phase !== "battle" || attackState.attackerIndex === null) return
 
-    const attacker = myField.unitZone[attackState.attackerIndex]
+    const isUltimateAttacker = attackState.attackerSource === "ultimate"
+    const attacker = isUltimateAttacker ? myFieldRef.current.ultimateZone : myFieldRef.current.unitZone[attackState.attackerIndex]
     if (!attacker || !attacker.canAttack || attacker.hasAttacked) return
 
     const damage = attacker.currentDp
     const attackerIdx = attackState.attackerIndex
 
+    // Helper to mark the attacker as having attacked
+    const markAttackerDone = (counterDamage?: number) => {
+      setMyField((prev) => {
+        if (isUltimateAttacker && prev.ultimateZone) {
+          const newDp = counterDamage !== undefined ? prev.ultimateZone.currentDp - counterDamage : prev.ultimateZone.currentDp
+          const updated = { ...prev.ultimateZone, currentDp: newDp, hasAttacked: true, canAttack: false }
+          if (newDp <= 0) {
+            return { ...prev, ultimateZone: null, graveyard: [...prev.graveyard, { ...updated, currentDp: 0 }] }
+          }
+          return { ...prev, ultimateZone: updated }
+        } else {
+          const newUnitZone = [...prev.unitZone]
+          const newGraveyard = [...prev.graveyard]
+          const unit = newUnitZone[attackerIdx]
+          if (unit) {
+            const newDp = counterDamage !== undefined ? unit.currentDp - counterDamage : unit.currentDp
+            const updated = { ...unit, currentDp: newDp, hasAttacked: true, canAttack: false }
+            if (newDp <= 0) {
+              newGraveyard.push({ ...updated, currentDp: 0 })
+              newUnitZone[attackerIdx] = null
+            } else {
+              newUnitZone[attackerIdx] = updated
+            }
+          }
+          return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
+        }
+      })
+    }
+
     if (targetType === "direct") {
-      // Direct attack
       setOpponentField((prev) => ({
         ...prev,
         life: Math.max(0, prev.life - damage),
@@ -1543,27 +2135,18 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       sendAction({
         type: "attack",
         playerId,
-        data: { attackerIndex: attackerIdx, targetType: "direct", damage },
+        data: { attackerIndex: attackerIdx, attackerSource: isUltimateAttacker ? "ultimate" : "unit", targetType: "direct", damage },
         timestamp: Date.now(),
       })
 
-      // Mark attacker as having attacked (immutable)
-      setMyField((prev) => {
-        const newUnitZone = [...prev.unitZone]
-        const unit = newUnitZone[attackerIdx]
-        if (unit) {
-          newUnitZone[attackerIdx] = { ...unit, hasAttacked: true, canAttack: false }
-        }
-        return { ...prev, unitZone: newUnitZone }
-      })
+      markAttackerDone()
     } else if (targetType === "unit" && targetIndex !== undefined) {
-      // Read target DP from ref to avoid stale closure
       const currentTarget = opponentFieldRef.current.unitZone[targetIndex]
       if (!currentTarget) return
 
       const targetDp = currentTarget.currentDp
 
-      // Apply damage to opponent's unit (immutable)
+      // Apply damage to opponent's unit
       setOpponentField((prev) => {
         const newUnitZone = [...prev.unitZone]
         const newGraveyard = [...prev.graveyard]
@@ -1580,28 +2163,13 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
       })
 
-      // Attacker takes counter damage (immutable)
-      setMyField((prev) => {
-        const newUnitZone = [...prev.unitZone]
-        const newGraveyard = [...prev.graveyard]
-        const attackerUnit = newUnitZone[attackerIdx]
-        if (attackerUnit) {
-          const newDp = attackerUnit.currentDp - targetDp
-          const updated = { ...attackerUnit, currentDp: newDp, hasAttacked: true, canAttack: false }
-          if (newDp <= 0) {
-            newGraveyard.push({ ...updated, currentDp: 0 })
-            newUnitZone[attackerIdx] = null
-          } else {
-            newUnitZone[attackerIdx] = updated
-          }
-        }
-        return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
-      })
+      // Attacker takes counter damage
+      markAttackerDone(targetDp)
 
       sendAction({
         type: "attack",
         playerId,
-        data: { attackerIndex: attackerIdx, targetType: "unit", targetIndex, damage, counterDamage: targetDp },
+        data: { attackerIndex: attackerIdx, attackerSource: isUltimateAttacker ? "ultimate" : "unit", targetType: "unit", targetIndex, damage, counterDamage: targetDp },
         timestamp: Date.now(),
       })
     }
@@ -2267,6 +2835,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                       draggedHandCard && isUltimateCard(draggedHandCard.card) && !myField.ultimateZone
                     const isDroppingUltimate = dropTarget?.type === "ultimate"
                     const isValidUltimateTarget = isSelectedUltimate || isDragUltimate
+                    const canUltimateAttack = myField.ultimateZone && canUnitAttackNow(myField.ultimateZone)
 
                     return (
                       <div
@@ -2281,9 +2850,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                             ? "border-green-400 bg-green-500/60 scale-110 shadow-lg shadow-green-500/50 ring-2 ring-green-400/50 animate-pulse"
                             : isValidUltimateTarget
                               ? "border-emerald-400 bg-emerald-900/40 cursor-pointer"
-                              : "border-emerald-600/40"
+                              : canUltimateAttack
+                                ? "border-yellow-400 shadow-lg shadow-yellow-500/40"
+                                : "border-emerald-600/40"
                         }`}
                       >
+                        {canUltimateAttack && (
+                          <div className="absolute -inset-1 bg-yellow-400/40 rounded blur-sm animate-pulse -z-10" />
+                        )}
                         {myField.ultimateZone ? (
                           <>
                             <Image
@@ -2291,12 +2865,29 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                               alt={myField.ultimateZone.name}
                               fill
                               className="object-cover rounded"
-                              onMouseDown={() => handleCardPressStart(myField.ultimateZone!)}
+                              onMouseDown={(e) => {
+                                if (canUltimateAttack) {
+                                  handleAttackStart(0, e, "ultimate")
+                                } else {
+                                  handleCardPressStart(myField.ultimateZone!)
+                                }
+                              }}
                               onMouseUp={handleCardPressEnd}
                               onMouseLeave={handleCardPressEnd}
-                              onTouchStart={() => handleCardPressStart(myField.ultimateZone!)}
+                              onTouchStart={(e) => {
+                                if (canUltimateAttack) {
+                                  handleAttackStart(0, e, "ultimate")
+                                } else {
+                                  handleCardPressStart(myField.ultimateZone!)
+                                }
+                              }}
                               onTouchEnd={handleCardPressEnd}
                             />
+                            {canUltimateAttack && (
+                              <div className="absolute top-0 left-0 right-0 bg-green-500 text-white text-[10px] text-center font-bold animate-pulse">
+                                {t("dragToAttack")}
+                              </div>
+                            )}
                             <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-center text-xs text-white font-bold py-0.5">
                               {myField.ultimateZone.currentDp} DP
                             </div>
@@ -2556,20 +3147,60 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       <div className="absolute inset-0 bg-black/50 pointer-events-auto" onClick={cancelItemSelection} />
       
       {/* Instruction banner */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10 pointer-events-auto">
+      <div className="absolute top-20 left-1/2 -translate-x-1/2 z-10 pointer-events-auto" style={{ maxWidth: "90vw" }}>
         <div className="bg-gradient-to-r from-amber-600 to-amber-700 px-6 py-3 rounded-xl border-2 border-amber-400 shadow-2xl">
           <p className="text-white font-bold text-center text-sm">
-            {itemSelectionMode.step === "selectEnemy"
-              ? "Selecione uma unidade INIMIGA como alvo"
-              : "Selecione uma unidade ALIADA para receber o efeito"}
+            {itemSelectionMode.step === "choice"
+              ? "Escolha uma opcao"
+              : itemSelectionMode.step === "dice"
+                ? itemSelectionMode.diceResult
+                  ? `Resultado: ${itemSelectionMode.diceResult}!`
+                  : "Toque para rolar o dado"
+                : itemSelectionMode.step === "selectEnemy"
+                  ? "Selecione uma unidade INIMIGA como alvo"
+                  : "Selecione uma unidade ALIADA para receber o efeito"}
           </p>
           <p className="text-amber-200 text-xs text-center mt-1">
-            {itemSelectionMode.itemCard?.name} | Toque para cancelar
+            {itemSelectionMode.itemCard?.name} | Toque fora para cancelar
           </p>
         </div>
       </div>
 
-      {/* Highlight targetable units */}
+      {/* Choice options UI */}
+      {itemSelectionMode.step === "choice" && itemSelectionMode.effect?.choiceOptions && (
+        <div className="absolute top-36 left-1/2 -translate-x-1/2 z-10 pointer-events-auto flex flex-col gap-2" style={{ maxWidth: "90vw" }}>
+          {itemSelectionMode.effect.choiceOptions.map((option) => (
+            <button
+              key={option.id}
+              onClick={() => handleChoiceSelect(option.id)}
+              className="bg-gradient-to-r from-slate-700 to-slate-600 hover:from-amber-600 hover:to-amber-500 text-white px-6 py-3 rounded-xl border-2 border-slate-500 hover:border-amber-400 transition-all shadow-xl"
+            >
+              <div className="font-bold text-sm">{option.label}</div>
+              <div className="text-slate-300 text-xs mt-0.5">{option.description}</div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Dice roll UI */}
+      {itemSelectionMode.step === "dice" && (
+        <div className="absolute top-36 left-1/2 -translate-x-1/2 z-10 pointer-events-auto flex flex-col items-center gap-3">
+          {!itemSelectionMode.diceResult ? (
+            <button
+              onClick={handleDiceRoll}
+              className="w-24 h-24 bg-gradient-to-br from-amber-500 to-amber-700 rounded-2xl border-4 border-amber-300 shadow-2xl flex items-center justify-center text-4xl font-bold text-white hover:scale-110 transition-transform animate-pulse"
+            >
+              {'?'}
+            </button>
+          ) : (
+            <div className="w-24 h-24 bg-gradient-to-br from-amber-500 to-amber-700 rounded-2xl border-4 border-amber-300 shadow-2xl flex items-center justify-center text-5xl font-bold text-white">
+              {itemSelectionMode.diceResult}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Highlight targetable enemy units */}
       {itemSelectionMode.step === "selectEnemy" && opponentField.unitZone.map((card, i) => {
         if (!card) return null
         const el = document.querySelector(`[data-enemy-unit="${i}"]`)
@@ -2579,17 +3210,13 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
           <div
             key={`enemy-target-${i}`}
             className="absolute pointer-events-auto cursor-pointer border-4 border-red-500 rounded bg-red-500/30 animate-pulse z-20"
-            style={{
-              left: rect.left - 4,
-              top: rect.top - 4,
-              width: rect.width + 8,
-              height: rect.height + 8,
-            }}
+            style={{ left: rect.left - 4, top: rect.top - 4, width: rect.width + 8, height: rect.height + 8 }}
             onClick={() => handleEnemyUnitSelect(i)}
           />
         )
       })}
       
+      {/* Highlight targetable ally units */}
       {itemSelectionMode.step === "selectAlly" && myField.unitZone.map((card, i) => {
         if (!card) return null
         const el = document.querySelector(`[data-player-unit-slot="${i}"]`)
@@ -2599,12 +3226,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
           <div
             key={`ally-target-${i}`}
             className="absolute pointer-events-auto cursor-pointer border-4 border-green-500 rounded bg-green-500/30 animate-pulse z-20"
-            style={{
-              left: rect.left - 4,
-              top: rect.top - 4,
-              width: rect.width + 8,
-              height: rect.height + 8,
-            }}
+            style={{ left: rect.left - 4, top: rect.top - 4, width: rect.width + 8, height: rect.height + 8 }}
             onClick={() => handleAllyUnitSelect(i)}
           />
         )
