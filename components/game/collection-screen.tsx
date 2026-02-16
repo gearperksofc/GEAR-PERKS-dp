@@ -111,6 +111,7 @@ export default function CollectionScreen({ onBack }: CollectionScreenProps) {
               <SelectItem value="magic">{t("magic")}</SelectItem>
               <SelectItem value="item">{t("item")}</SelectItem>
               <SelectItem value="ultimateGear">{t("ultimateGear")}</SelectItem>
+              <SelectItem value="ultimateGuardian">{t("ultimateGuardian")}</SelectItem>
               <SelectItem value="scenario">Scenario</SelectItem>
             </SelectContent>
           </Select>
