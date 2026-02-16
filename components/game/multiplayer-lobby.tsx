@@ -32,11 +32,9 @@ interface RoomData {
   hostId: string
   hostName: string
   hostDeck: Deck | null
-  hostAvatar: string | null
   guestId: string | null
   guestName: string | null
   guestDeck: Deck | null
-  guestAvatar: string | null
   hostReady: boolean
   guestReady: boolean
 }
@@ -53,7 +51,7 @@ type LobbyScreen = "choice" | "create" | "join" | "waiting" | "lobby"
 
 export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps) {
   const { t } = useLanguage()
-  const { decks, playerProfile, playerId, getPlaymatForDeck } = useGame()
+  const { decks, playerProfile, playerId } = useGame()
   const supabase = createClient()
   
   const [screen, setScreen] = useState<LobbyScreen>("choice")
@@ -102,38 +100,40 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         ? playerId
         : crypto.randomUUID()
       
-      // Resolve the playmat image and embed it into the serialized deck
-      // so the opponent can display the correct playmat without needing our local playmat collection
-      const deckToSerialize = selectedDeck
-        ? (() => {
-            const playmat = getPlaymatForDeck(selectedDeck)
-            return { ...selectedDeck, playmatImage: playmat?.image || null }
-          })()
-        : null
-
+      console.log("[v0] Creating room...")
+      console.log("[v0] Supabase URL:", process.env.NEXT_PUBLIC_SUPABASE_URL ? "SET" : "NOT SET")
+      console.log("[v0] Room code:", code)
+      console.log("[v0] Host UUID:", hostUUID)
+      console.log("[v0] Host name:", playerProfile.name)
+      
       const insertPayload = {
         room_code: code,
         host_id: hostUUID,
         host_name: playerProfile.name || "Jogador",
-        host_avatar: playerProfile.avatarUrl || null,
-        host_deck: deckToSerialize ? JSON.stringify(deckToSerialize) : null,
+        host_deck: selectedDeck ? JSON.stringify(selectedDeck) : null,
         status: "waiting",
         host_ready: false,
         guest_ready: false,
       }
+      console.log("[v0] Insert payload:", JSON.stringify(insertPayload, null, 2))
+      
       const { data, error: insertError } = await supabase
         .from("duel_rooms")
         .insert(insertPayload)
         .select()
         .single()
 
+      console.log("[v0] Insert response - data:", data, "error:", insertError)
+
       if (insertError) {
+        console.error("[v0] Error creating room:", JSON.stringify(insertError, null, 2))
         setError(`Erro ao criar sala: ${insertError.message || "Tente novamente."}`)
         setIsLoading(false)
         return
       }
       
       if (!data) {
+        console.error("[v0] No data returned from insert")
         setError("Erro ao criar sala: dados não retornados")
         setIsLoading(false)
         return
@@ -146,12 +146,10 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         isHost: true,
         hostId: hostUUID,
         hostName: playerProfile.name || "Jogador",
-        hostAvatar: playerProfile.avatarUrl || null,
         hostDeck: selectedDeck,
         guestId: null,
         guestName: null,
         guestDeck: null,
-        guestAvatar: null,
         hostReady: false,
         guestReady: false,
       })
@@ -161,7 +159,7 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
       subscribeToRoom(data.id, code)
       
     } catch (err) {
-      console.error("Exception creating room:", err)
+      console.error("[v0] Exception creating room:", err)
       setError(`Erro ao criar sala: ${err instanceof Error ? err.message : "Tente novamente."}`)
     }
     
@@ -207,27 +205,19 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         return
       }
 
-      // Resolve the playmat image and embed it into the serialized deck
-      const guestDeckToSerialize = selectedDeck
-        ? (() => {
-            const playmat = getPlaymatForDeck(selectedDeck)
-            return { ...selectedDeck, playmatImage: playmat?.image || null }
-          })()
-        : null
-
       // Update room with guest info
       const { error: updateError } = await supabase
         .from("duel_rooms")
         .update({
           guest_id: guestUUID,
           guest_name: playerProfile.name || "Jogador",
-          guest_avatar: playerProfile.avatarUrl || null,
-          guest_deck: guestDeckToSerialize ? JSON.stringify(guestDeckToSerialize) : null,
+          guest_deck: selectedDeck ? JSON.stringify(selectedDeck) : null,
           status: "lobby",
         })
         .eq("id", room.id)
 
       if (updateError) {
+        console.log("[v0] Error joining room:", updateError)
         setError("Erro ao entrar na sala. Tente novamente.")
         setIsLoading(false)
         return
@@ -252,12 +242,10 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         isHost: false,
         hostId: room.host_id,
         hostName: room.host_name,
-        hostAvatar: room.host_avatar || null,
         hostDeck: hostDeck,
         guestId: guestUUID,
         guestName: playerProfile.name,
         guestDeck: selectedDeck,
-        guestAvatar: playerProfile.avatarUrl || null,
         hostReady: room.host_ready,
         guestReady: false,
       })
@@ -276,6 +264,8 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
 
   // Subscribe to room updates
   const subscribeToRoom = useCallback((roomId: string, code: string) => {
+    console.log("[v0] subscribeToRoom called - roomId:", roomId, "code:", code)
+    
     // Clean up existing subscription
     if (roomChannelRef.current) {
       roomChannelRef.current.unsubscribe()
@@ -321,20 +311,27 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
               }
             }
             
+            console.log("[v0] Room update received!")
+            console.log("[v0] - newData.status:", newData.status)
+            console.log("[v0] - newData.guest_id:", newData.guest_id)
+            console.log("[v0] - newData.guest_name:", newData.guest_name)
+            console.log("[v0] - prev.isHost:", prev.isHost)
+            console.log("[v0] - hostDeck:", hostDeck?.name, "guestDeck:", guestDeck?.name)
+            
             const updated: RoomData = {
               ...prev,
               guestId: newData.guest_id,
               guestName: newData.guest_name,
               guestDeck: guestDeck,
-              guestAvatar: newData.guest_avatar || prev.guestAvatar,
               hostDeck: hostDeck,
-              hostAvatar: newData.host_avatar || prev.hostAvatar,
               hostReady: newData.host_ready,
               guestReady: newData.guest_ready,
             }
             
             // If guest joined and we're the host, move to lobby
+            console.log("[v0] Checking if should move to lobby:", prev.isHost, newData.guest_id, newData.status)
             if (prev.isHost && newData.guest_id && newData.status === "lobby") {
+              console.log("[v0] Moving host to lobby screen!")
               setScreen("lobby")
               subscribeToChat(roomId)
             }
@@ -348,7 +345,9 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
           })
         }
       )
-      .subscribe()
+      .subscribe((status) => {
+        console.log("[v0] Room subscription status:", status)
+      })
 
     roomChannelRef.current = channel
   }, [supabase])
@@ -424,10 +423,10 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
         })
       
       if (insertError) {
-        console.error("Error sending message:", insertError)
+        console.error("[v0] Error sending message:", insertError)
       }
     } catch (err) {
-        console.error("Exception sending message:", err)
+      console.error("[v0] Exception sending message:", err)
     }
   }
   
@@ -746,32 +745,15 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
             </div>
           </div>
 
-          {/* Host Profile + Waiting Animation */}
+          {/* Waiting Animation */}
           <div className="bg-slate-800/50 rounded-xl p-8 border border-slate-700 text-center">
             <div className="flex justify-center mb-4">
-              <div className="w-20 h-20 rounded-full bg-amber-500/20 border-2 border-amber-500/50 flex items-center justify-center overflow-hidden relative">
-                {playerProfile.avatarUrl ? (
-                  <Image 
-                    src={playerProfile.avatarUrl} 
-                    alt={playerProfile.name || "Host"} 
-                    fill
-                    className="object-cover"
-                  />
-                ) : (
-                  <span className="text-amber-400 font-bold text-2xl">
-                    {(playerProfile.name || "H").charAt(0).toUpperCase()}
-                  </span>
-                )}
-              </div>
+              <Loader2 className="w-12 h-12 text-amber-400 animate-spin" />
             </div>
-            <p className="text-white font-medium mb-1">{playerProfile.name || "Jogador"}</p>
-            <p className="text-slate-400 text-sm mb-4">
+            <p className="text-white font-medium">Esperando outro jogador entrar...</p>
+            <p className="text-slate-400 text-sm mt-2">
               Deck: {selectedDeck?.name}
             </p>
-            <div className="flex justify-center mb-3">
-              <Loader2 className="w-8 h-8 text-amber-400 animate-spin" />
-            </div>
-            <p className="text-slate-400 text-sm">Esperando outro jogador entrar...</p>
           </div>
         </div>
       </div>
@@ -803,13 +785,14 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
               roomData.hostReady ? "border-green-500" : "border-slate-700"
             }`}>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-12 h-12 rounded-full bg-amber-500/30 flex items-center justify-center overflow-hidden border-2 border-amber-500/50 relative">
-                  {roomData.hostAvatar ? (
+                <div className="w-12 h-12 rounded-full bg-amber-500/30 flex items-center justify-center overflow-hidden border-2 border-amber-500/50">
+                  {roomData.isHost && playerProfile.avatarUrl ? (
                     <Image 
-                      src={roomData.hostAvatar} 
+                      src={playerProfile.avatarUrl} 
                       alt={roomData.hostName} 
-                      fill
-                      className="object-cover"
+                      width={48} 
+                      height={48} 
+                      className="object-cover w-full h-full"
                     />
                   ) : (
                     <span className="text-amber-400 font-bold text-lg">{roomData.hostName?.charAt(0)?.toUpperCase() || "H"}</span>
@@ -839,13 +822,14 @@ export function MultiplayerLobby({ onBack, onStartDuel }: MultiplayerLobbyProps)
               roomData.guestReady ? "border-green-500" : "border-slate-700"
             }`}>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-12 h-12 rounded-full bg-blue-500/30 flex items-center justify-center overflow-hidden border-2 border-blue-500/50 relative">
-                  {roomData.guestAvatar ? (
+                <div className="w-12 h-12 rounded-full bg-blue-500/30 flex items-center justify-center overflow-hidden border-2 border-blue-500/50">
+                  {!roomData.isHost && playerProfile.avatarUrl ? (
                     <Image 
-                      src={roomData.guestAvatar} 
+                      src={playerProfile.avatarUrl} 
                       alt={roomData.guestName || "Guest"} 
-                      fill
-                      className="object-cover"
+                      width={48} 
+                      height={48} 
+                      className="object-cover w-full h-full"
                     />
                   ) : roomData.guestName ? (
                     <span className="text-blue-400 font-bold text-lg">{roomData.guestName.charAt(0).toUpperCase()}</span>
