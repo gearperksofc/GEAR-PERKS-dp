@@ -514,6 +514,59 @@ const PVP_FUNCTION_CARD_EFFECTS: Record<string, FunctionCardEffect> = {
       }
     },
   },
+  "dados-do-cataclismo": {
+    id: "dados-do-cataclismo",
+    name: "Dados do Cataclismo",
+    requiresTargets: true,
+    requiresDice: true,
+    targetConfig: { allyUnits: 1 },
+    canActivate: (context) => {
+      if (!context.playerField.unitZone.some((u) => u !== null)) return { canActivate: false, reason: "Voce precisa ter uma unidade em campo" }
+      return { canActivate: true }
+    },
+    resolve: (context, targets) => {
+      if (!targets?.allyUnitIndices?.length) return { success: false, message: "Selecione uma unidade sua" }
+      const allyIndex = targets.allyUnitIndices[0]
+      const allyUnit = context.playerField.unitZone[allyIndex]
+      if (!allyUnit) return { success: false, message: "Unidade nao encontrada" }
+      const diceResult = targets.diceResult || 1
+      const currentDp = allyUnit.currentDp || allyUnit.dp
+      if (diceResult >= 1 && diceResult <= 3) {
+        return { success: true, message: `Dado: ${diceResult}! Nenhuma unidade recebe bonus.` }
+      } else {
+        const newDp = currentDp + 6
+        context.setPlayerField((prev) => {
+          const newUnitZone = [...prev.unitZone]
+          if (newUnitZone[allyIndex]) newUnitZone[allyIndex] = { ...newUnitZone[allyIndex]!, currentDp: newDp }
+          return { ...prev, unitZone: newUnitZone }
+        })
+        let extraMsg = ""
+        if (diceResult === 6) {
+          const enemyUnits = context.enemyField.unitZone
+          let bestIdx = -1
+          let bestDp = -1
+          enemyUnits.forEach((u, idx) => { if (u && (u as FieldCard).currentDp > bestDp) { bestDp = (u as FieldCard).currentDp; bestIdx = idx } })
+          if (bestIdx !== -1) {
+            const enemyUnit = enemyUnits[bestIdx]!
+            const enemyCurrentDp = (enemyUnit as FieldCard).currentDp
+            const enemyNewDp = Math.max(0, enemyCurrentDp - 3)
+            const enemyDestroyed = enemyNewDp <= 0
+            context.setEnemyField((prev) => {
+              const newEnemyUnits = [...prev.unitZone]
+              const newGraveyard = [...prev.graveyard]
+              if (enemyDestroyed) { if (newEnemyUnits[bestIdx]) newGraveyard.push(newEnemyUnits[bestIdx]!); newEnemyUnits[bestIdx] = null }
+              else { if (newEnemyUnits[bestIdx]) newEnemyUnits[bestIdx] = { ...newEnemyUnits[bestIdx]!, currentDp: enemyNewDp } as FieldCard }
+              return { ...prev, unitZone: newEnemyUnits, graveyard: newGraveyard }
+            })
+            extraMsg = enemyDestroyed
+              ? ` CRITICO! ${enemyUnit.name} inimiga destruida!`
+              : ` CRITICO! ${enemyUnit.name} inimiga -3 DP! (${enemyCurrentDp} -> ${enemyNewDp})`
+          }
+        }
+        return { success: true, message: `Dado: ${diceResult}! ${allyUnit.name} +6 DP! (${currentDp} -> ${newDp})${extraMsg}`, broadcastDamage: diceResult === 6 ? { target: "unit", amount: 3, cardName: "Dados do Cataclismo" } : undefined }
+      }
+    },
+  },
 }
 
 // Helper: extract base card ID
@@ -660,7 +713,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   const chatChannelRef = useRef<RealtimeChannel | null>(null)
   const fieldRef = useRef<HTMLDivElement>(null)
   const cardPressTimer = useRef<NodeJS.Timeout | null>(null)
-  const positionRef = useRef({ startX: 0, startY: 0, currentX: 0, currentY: 0 })
+  const positionRef = useRef({ startX: 0, startY: 0, currentX: 0, currentY: 0, lastTargetCheck: 0 })
   const gameResultRecordedRef = useRef(false)
   const draggedCardRef = useRef<HTMLDivElement>(null)
   const dragPosRef = useRef({ x: 0, y: 0, rotation: 0, lastCheck: 0 })
@@ -677,6 +730,187 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     setEffectFeedback({ active: true, message, type })
     setTimeout(() => setEffectFeedback(null), 2500)
   }, [])
+
+  // Element glow helper
+  const getElementGlow = (element: string): string => {
+    const el = element?.toLowerCase()
+    switch (el) {
+      case "aquos": case "aquo": return "rgba(0, 191, 255, 0.8)"
+      case "fire": case "pyrus": return "rgba(255, 69, 0, 0.8)"
+      case "ventus": return "rgba(50, 205, 50, 0.8)"
+      case "darkness": case "darkus": case "dark": return "rgba(153, 50, 204, 0.8)"
+      case "lightness": case "haos": case "light": return "rgba(255, 215, 0, 0.8)"
+      case "void": return "rgba(233, 69, 96, 0.8)"
+      default: return "rgba(255, 255, 255, 0.8)"
+    }
+  }
+
+  // Trigger explosion animation at a point
+  const triggerExplosion = useCallback((targetX: number, targetY: number, element: string) => {
+    const colors = getElementColors(element)
+    const el = element?.toLowerCase()
+    const particles: { x: number; y: number; vx: number; vy: number; size: number; alpha: number; color: string }[] = []
+
+    // Generate particles based on element
+    for (let i = 0; i < 60; i++) {
+      const angle = (Math.PI * 2 * i) / 60 + Math.random() * 0.3
+      const speed = 5 + Math.random() * 10
+      particles.push({ x: targetX, y: targetY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 4, size: 5 + Math.random() * 12, color: colors[Math.floor(Math.random() * colors.length)], alpha: 1 })
+    }
+    // White core
+    for (let i = 0; i < 20; i++) {
+      const angle = Math.random() * Math.PI * 2
+      const speed = 2 + Math.random() * 4
+      particles.push({ x: targetX, y: targetY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, size: 15 + Math.random() * 25, color: "#ffffff", alpha: 0.8 })
+    }
+    // Sparks
+    for (let i = 0; i < 30; i++) {
+      const angle = Math.random() * Math.PI * 2
+      const speed = 8 + Math.random() * 8
+      particles.push({ x: targetX, y: targetY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 4, size: 2 + Math.random() * 4, color: "#ffffff", alpha: 1 })
+    }
+
+    // Element-specific bonus particles
+    if (el === "fire" || el === "pyrus") {
+      for (let ring = 0; ring < 3; ring++) {
+        for (let i = 0; i < 35; i++) {
+          const angle = (Math.PI * 2 * i) / 35; const speed = (4 + ring * 3) + Math.random() * 3
+          particles.push({ x: targetX, y: targetY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, size: 5 + Math.random() * 8, color: ring === 0 ? "#ff4500" : ring === 1 ? "#ff8c00" : "#ffa500", alpha: 0.9 })
+        }
+      }
+    } else if (el === "aquos" || el === "aquo") {
+      for (let ring = 0; ring < 4; ring++) {
+        for (let i = 0; i < 25; i++) {
+          const angle = (Math.PI * 2 * i) / 25; const speed = (3 + ring * 2) + Math.random() * 2
+          particles.push({ x: targetX, y: targetY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, size: 6 + Math.random() * 10, color: colors[Math.floor(Math.random() * colors.length)], alpha: 0.85 })
+        }
+      }
+    } else if (el === "ventus") {
+      for (let helix = 0; helix < 2; helix++) {
+        for (let i = 0; i < 40; i++) {
+          const spiralAngle = (i / 40) * Math.PI * 8 + helix * Math.PI; const radius = 5 + (i / 40) * 80; const speed = 5 + Math.random() * 8
+          particles.push({ x: targetX + Math.cos(spiralAngle) * radius * 0.4, y: targetY + Math.sin(spiralAngle) * radius * 0.4, vx: Math.cos(spiralAngle + Math.PI / 2) * speed, vy: Math.sin(spiralAngle + Math.PI / 2) * speed - 4, size: 5 + Math.random() * 10, color: colors[Math.floor(Math.random() * colors.length)], alpha: 0.9 })
+        }
+      }
+    } else if (el === "darkness" || el === "darkus" || el === "dark") {
+      for (let i = 0; i < 12; i++) {
+        const baseAngle = (Math.PI * 2 * i) / 12
+        for (let j = 0; j < 10; j++) {
+          particles.push({ x: targetX + Math.cos(baseAngle) * j * 5, y: targetY + Math.sin(baseAngle) * j * 5, vx: Math.cos(baseAngle) * (3 + j * 0.6), vy: Math.sin(baseAngle) * (3 + j * 0.6), size: 14 - j * 0.7, color: j % 3 === 0 ? "#4b0082" : j % 3 === 1 ? "#9932cc" : "#800080", alpha: 0.9 - j * 0.04 })
+        }
+      }
+    } else if (el === "lightness" || el === "haos" || el === "light") {
+      for (let i = 0; i < 12; i++) {
+        const rayAngle = (Math.PI * 2 * i) / 12
+        for (let j = 0; j < 8; j++) {
+          particles.push({ x: targetX, y: targetY, vx: Math.cos(rayAngle) * (5 + j * 2.5), vy: Math.sin(rayAngle) * (5 + j * 2.5), size: 18 - j * 1.5, color: j % 2 === 0 ? "#ffffff" : "#ffd700", alpha: 1 - j * 0.08 })
+        }
+      }
+    } else if (el === "void") {
+      for (let i = 0; i < 10; i++) {
+        const baseAngle = (Math.PI * 2 * i) / 10
+        for (let j = 0; j < 10; j++) {
+          const jitter = (Math.random() - 0.5) * 0.6
+          particles.push({ x: targetX, y: targetY, vx: Math.cos(baseAngle + jitter) * (4 + j * 1.3), vy: Math.sin(baseAngle + jitter) * (4 + j * 1.3), size: 5 + Math.random() * 5, color: j % 4 === 0 ? "#e94560" : j % 4 === 1 ? "#533483" : j % 4 === 2 ? "#0f3460" : "#ff1493", alpha: 1 - j * 0.04 })
+        }
+      }
+    }
+
+    const effectId = `explosion-${Date.now()}`
+    setExplosionEffects((prev) => [...prev, { id: effectId, x: targetX, y: targetY, element, particles, startTime: Date.now() }])
+
+    const flashColors: Record<string, string> = { aquos: "rgba(0, 191, 255, 0.4)", aquo: "rgba(0, 191, 255, 0.4)", fire: "rgba(255, 100, 0, 0.5)", pyrus: "rgba(255, 100, 0, 0.5)", ventus: "rgba(50, 205, 50, 0.35)", darkness: "rgba(128, 0, 128, 0.45)", darkus: "rgba(128, 0, 128, 0.45)", dark: "rgba(128, 0, 128, 0.45)", lightness: "rgba(255, 255, 200, 0.5)", haos: "rgba(255, 255, 200, 0.5)", light: "rgba(255, 255, 200, 0.5)", void: "rgba(233, 69, 96, 0.45)" }
+    setImpactFlash({ active: true, color: flashColors[el] || "rgba(255, 255, 255, 0.3)" })
+    setTimeout(() => setImpactFlash({ active: false, color: "#ffffff" }), 200)
+    setTimeout(() => setExplosionEffects((prev) => prev.filter((e) => e.id !== effectId)), 3000)
+  }, [])
+
+  // Canvas animation loop for explosions
+  useEffect(() => {
+    for (const effect of explosionEffects) {
+      if (!activeParticlesRef.current.has(effect.id)) {
+        activeParticlesRef.current.set(effect.id, { particles: effect.particles.map((p) => ({ ...p })), startTime: effect.startTime, element: effect.element, x: effect.x, y: effect.y })
+      }
+    }
+    const currentIds = new Set(explosionEffects.map((e) => e.id))
+    for (const id of activeParticlesRef.current.keys()) { if (!currentIds.has(id)) activeParticlesRef.current.delete(id) }
+    if (activeParticlesRef.current.size === 0) return
+
+    const canvas = explosionCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+    canvas.width = window.innerWidth; canvas.height = window.innerHeight
+
+    let animationId: number
+    const duration = 2600
+    const animate = () => {
+      const now = Date.now()
+      const activeEffects = activeParticlesRef.current
+      if (activeEffects.size === 0) { ctx.clearRect(0, 0, canvas.width, canvas.height); return }
+      const localEffects = Array.from(activeEffects.entries())
+      const allDone = localEffects.every(([, eff]) => now - eff.startTime > duration)
+      if (allDone) { ctx.clearRect(0, 0, canvas.width, canvas.height); return }
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      localEffects.forEach(([, effect]) => {
+        const elapsed = now - effect.startTime
+        if (elapsed > duration) return
+        const el = effect.element?.toLowerCase()
+        const colors = getElementColors(effect.element)
+
+        // Element-specific canvas effects
+        if (el === "aquos" || el === "aquo") {
+          for (let ring = 0; ring < 4; ring++) {
+            const rp = Math.min(1, (elapsed - ring * 80) / 500)
+            if (rp > 0 && rp < 1) { ctx.save(); ctx.globalAlpha = (1 - rp) * 0.5; ctx.strokeStyle = ring % 2 === 0 ? "#00bfff" : "#40e0d0"; ctx.lineWidth = 3 * (1 - rp); ctx.shadowColor = "#00ffff"; ctx.shadowBlur = 15; ctx.beginPath(); ctx.arc(effect.x, effect.y, rp * 180, 0, Math.PI * 2); ctx.stroke(); ctx.restore() }
+          }
+        } else if (el === "fire" || el === "pyrus") {
+          const fp = Math.min(1, elapsed / 350)
+          if (fp < 1) { ctx.save(); ctx.globalAlpha = (1 - fp) * 0.7; ctx.strokeStyle = "#ff6600"; ctx.lineWidth = 6 * (1 - fp); ctx.shadowColor = "#ff4500"; ctx.shadowBlur = 30; ctx.beginPath(); ctx.arc(effect.x, effect.y, fp * 160, 0, Math.PI * 2); ctx.stroke(); ctx.restore() }
+          for (let i = 0; i < 8; i++) { const la = (Math.PI * 2 * i) / 8; const lp = Math.min(1, elapsed / 400); if (lp < 1) { ctx.save(); ctx.globalAlpha = (1 - lp) * 0.6; ctx.strokeStyle = "#ffcc00"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(effect.x, effect.y); ctx.lineTo(effect.x + Math.cos(la) * lp * 120, effect.y + Math.sin(la) * lp * 120); ctx.stroke(); ctx.restore() } }
+        } else if (el === "ventus") {
+          const sp = Math.min(1, elapsed / 600)
+          if (sp < 1) { ctx.save(); ctx.globalAlpha = (1 - sp) * 0.6; ctx.strokeStyle = "#32cd32"; ctx.lineWidth = 2; ctx.shadowColor = "#00ff00"; ctx.shadowBlur = 15; ctx.beginPath(); for (let a = 0; a < Math.PI * 6; a += 0.1) { const r = a * 8 * sp; const x = effect.x + Math.cos(a + elapsed * 0.01) * r; const y = effect.y + Math.sin(a + elapsed * 0.01) * r; if (a === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y) }; ctx.stroke(); ctx.restore() }
+        } else if (el === "darkness" || el === "darkus" || el === "dark") {
+          const va = Math.max(0, 1 - elapsed / 800) * (Math.sin(elapsed * 0.02) * 0.3 + 0.7)
+          if (va > 0) { const g = ctx.createRadialGradient(effect.x, effect.y, 0, effect.x, effect.y, 90); g.addColorStop(0, `rgba(20, 0, 40, ${va})`); g.addColorStop(0.5, `rgba(75, 0, 130, ${va * 0.6})`); g.addColorStop(1, "transparent"); ctx.fillStyle = g; ctx.fillRect(effect.x - 90, effect.y - 90, 180, 180) }
+          for (let i = 0; i < 8; i++) { const ta = (Math.PI * 2 * i) / 8; const tp = Math.min(1, elapsed / 500); if (tp < 1) { ctx.save(); ctx.globalAlpha = (1 - tp) * 0.7; ctx.strokeStyle = "#9932cc"; ctx.lineWidth = 4 * (1 - tp * 0.5); ctx.shadowColor = "#800080"; ctx.shadowBlur = 20; ctx.beginPath(); ctx.moveTo(effect.x, effect.y); const segs = 5; for (let s = 1; s <= segs; s++) { const sp2 = s / segs; const w = Math.sin(s * 2 + elapsed * 0.01) * 15; ctx.lineTo(effect.x + Math.cos(ta) * tp * 100 * sp2 + Math.cos(ta + Math.PI / 2) * w, effect.y + Math.sin(ta) * tp * 100 * sp2 + Math.sin(ta + Math.PI / 2) * w) }; ctx.stroke(); ctx.restore() } }
+        } else if (el === "lightness" || el === "haos" || el === "light") {
+          const fa = Math.max(0, 1 - elapsed / 200)
+          if (fa > 0) { ctx.save(); ctx.globalAlpha = fa; ctx.fillStyle = "#ffffff"; ctx.shadowColor = "#ffd700"; ctx.shadowBlur = 60; ctx.beginPath(); ctx.arc(effect.x, effect.y, 50 * (1 - elapsed / 300), 0, Math.PI * 2); ctx.fill(); ctx.restore() }
+          for (let i = 0; i < 12; i++) { const ra = (Math.PI * 2 * i) / 12; const rp = Math.min(1, elapsed / 450); if (rp < 1) { ctx.save(); ctx.globalAlpha = (1 - rp) * 0.6; ctx.strokeStyle = i % 2 === 0 ? "#ffd700" : "#ffffff"; ctx.lineWidth = 4 * (1 - rp); ctx.shadowColor = "#ffff00"; ctx.shadowBlur = 20; ctx.beginPath(); ctx.moveTo(effect.x, effect.y); ctx.lineTo(effect.x + Math.cos(ra) * rp * 150, effect.y + Math.sin(ra) * rp * 150); ctx.stroke(); ctx.restore() } }
+        } else if (el === "void") {
+          for (let ring = 0; ring < 3; ring++) { const rp = Math.min(1, (elapsed - ring * 100) / 500); if (rp > 0 && rp < 1) { ctx.save(); ctx.globalAlpha = (1 - rp) * 0.6; ctx.strokeStyle = ring === 0 ? "#e94560" : ring === 1 ? "#533483" : "#0f3460"; ctx.lineWidth = 3; ctx.shadowColor = "#e94560"; ctx.shadowBlur = 15; ctx.setLineDash([5, 5]); ctx.beginPath(); ctx.arc(effect.x, effect.y, rp * 140, 0, Math.PI * 2); ctx.stroke(); ctx.restore() } }
+        } else {
+          const sp = Math.min(1, elapsed / 400)
+          if (sp < 1) { ctx.save(); ctx.globalAlpha = (1 - sp) * 0.6; ctx.strokeStyle = colors[0]; ctx.lineWidth = 4 * (1 - sp); ctx.shadowColor = colors[0]; ctx.shadowBlur = 20; ctx.beginPath(); ctx.arc(effect.x, effect.y, sp * 150, 0, Math.PI * 2); ctx.stroke(); ctx.restore() }
+        }
+
+        // Draw particles with physics
+        effect.particles.forEach((p) => {
+          const pel = el
+          if (pel === "aquos" || pel === "aquo") { p.vy += 0.08; p.vx *= 0.97 }
+          else if (pel === "fire" || pel === "pyrus") { p.vy -= 0.02; p.vy += 0.05; p.vx *= 0.96 }
+          else if (pel === "ventus") { p.vx *= 0.99; p.vy += 0.03 }
+          else if (pel === "darkness" || pel === "darkus" || pel === "dark") { p.vy += 0.05; p.vx *= 0.98 }
+          else if (pel === "lightness" || pel === "haos" || pel === "light") { p.vy += 0.02; p.vx *= 0.995 }
+          else if (pel === "void") { p.vx += (Math.random() - 0.5) * 0.3; p.vy += (Math.random() - 0.5) * 0.3; p.vy += 0.04 }
+          else { p.vy += 0.12; p.vx *= 0.98 }
+          p.x += p.vx; p.y += p.vy; p.alpha -= 0.012; p.size *= 0.97
+          if (p.alpha > 0 && p.size > 0.5) { ctx.save(); ctx.globalAlpha = Math.max(0, p.alpha); ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = p.size > 10 ? 30 : 15; ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(0.1, p.size), 0, Math.PI * 2); ctx.fill(); ctx.restore() }
+        })
+
+        // Central glow
+        const ga = Math.max(0, 1 - elapsed / 700)
+        if (ga > 0) { const g = ctx.createRadialGradient(effect.x, effect.y, 0, effect.x, effect.y, 140); g.addColorStop(0, getElementGlow(effect.element).replace("0.8", String(ga * 0.6))); g.addColorStop(0.5, getElementGlow(effect.element).replace("0.8", String(ga * 0.25))); g.addColorStop(1, "transparent"); ctx.fillStyle = g; ctx.fillRect(effect.x - 140, effect.y - 140, 280, 280) }
+      })
+
+      animationId = requestAnimationFrame(animate)
+    }
+    animationId = requestAnimationFrame(animate)
+    return () => { if (animationId) cancelAnimationFrame(animationId) }
+  }, [explosionEffects])
 
   // Item / Function card effect selection mode
   const [itemSelectionMode, setItemSelectionMode] = useState<{
@@ -707,8 +941,32 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       cardImage: card.image,
       cardType: card.type,
     })
-    setTimeout(() => setDrawAnimation(null), 1300)
+    setTimeout(() => setDrawAnimation(null), 2000)
   }, [])
+
+  // Ultimate Gear/Guardian ability tracking
+  const [playerUgAbilityUsed, setPlayerUgAbilityUsed] = useState(false)
+  const [showUgActivateBtn, setShowUgActivateBtn] = useState(false)
+  const [ugTargetMode, setUgTargetMode] = useState<{
+    active: boolean
+    ugCard: GameCard | null
+    type: "oden_sword" | "twiligh_avalon" | "kensei_ifraid" | "mefisto_foles" | "nightmare_armageddon" | "vatnavordr_messiham" | "yggdra_nidhogg" | null
+  }>({ active: false, ugCard: null, type: null })
+
+  // Explosion / attack animation state
+  interface Particle { x: number; y: number; vx: number; vy: number; size: number; alpha: number; color: string }
+  interface ExplosionEffect { id: string; x: number; y: number; element: string; particles: Particle[]; startTime: number }
+  const [explosionEffects, setExplosionEffects] = useState<ExplosionEffect[]>([])
+  const explosionCanvasRef = useRef<HTMLCanvasElement>(null)
+  const activeParticlesRef = useRef<Map<string, { particles: Particle[]; startTime: number; element: string; x: number; y: number }>>(new Map())
+  const [impactFlash, setImpactFlash] = useState<{ active: boolean; color: string }>({ active: false, color: "#ffffff" })
+
+  // Attack system refs for smooth dragging
+  const isDraggingRef = useRef(false)
+  const enemyUnitRectsRef = useRef<DOMRect[]>([])
+
+  // Track previous unit zone for auto-applying UG passive bonuses
+  const prevUnitZoneRef = useRef<(string | null)[]>([])
 
   // Get my deck and opponent deck
   const myDeck = roomData.isHost ? roomData.hostDeck : roomData.guestDeck
@@ -717,6 +975,75 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
 
   // Ref to always have latest handleOpponentAction (must be declared before useEffect that uses it)
   const handleOpponentActionRef = useRef<(action: DuelAction) => void>(() => {})
+
+  // UG Passive Bonus: when required unit appears on field after Ultimate is placed, apply DP bonus
+  useEffect(() => {
+    if (!myField.ultimateZone) {
+      prevUnitZoneRef.current = myField.unitZone.map((u) => u?.name || null)
+      return
+    }
+    const ug = myField.ultimateZone
+    const requiredUnit = ug.requiresUnit
+    const ability = ug.ability
+    const prevNames = prevUnitZoneRef.current
+    const currentNames = myField.unitZone.map((u) => u?.name || null)
+
+    // Element-based equips (ISGRIMM, RAGNA, SKUGGI)
+    const elementEquips: Record<string, { element: string; bonus: number }> = {
+      "ISGRIMM FENRIR": { element: "Ventus", bonus: 2 },
+      "RAGNA GULLINKAMBI": { element: "Haos", bonus: 3 },
+      "SKUGGI DRAUGR": { element: "Darkus", bonus: 3 },
+    }
+    const elemConfig = ability ? elementEquips[ability] : undefined
+    if (elemConfig && !requiredUnit) {
+      for (let i = 0; i < myField.unitZone.length; i++) {
+        const unit = myField.unitZone[i]
+        if (unit && unit.element === elemConfig.element && !prevNames.includes(unit.name)) {
+          setMyField((prev) => {
+            const newUnits = [...prev.unitZone]
+            const u = newUnits[i]
+            if (!u || u.element !== elemConfig.element) return prev
+            newUnits[i] = { ...u, currentDp: u.currentDp + elemConfig.bonus }
+            return { ...prev, unitZone: newUnits as (FieldCard | null)[] }
+          })
+          showEffectFeedback(`${unit.name} +${elemConfig.bonus} DP (${ability})!`, "success")
+          break
+        }
+      }
+      prevUnitZoneRef.current = currentNames
+      return
+    }
+
+    if (!requiredUnit) { prevUnitZoneRef.current = currentNames; return }
+
+    const wasPresent = prevNames.some((n) => n === requiredUnit)
+    const isNowPresent = currentNames.some((n) => n === requiredUnit)
+
+    if (!wasPresent && isNowPresent) {
+      const unitIdx = myField.unitZone.findIndex((u) => u && u.name === requiredUnit)
+      if (unitIdx !== -1) {
+        setMyField((prev) => {
+          const newUnits = [...prev.unitZone]
+          const unit = newUnits[unitIdx]
+          if (!unit) return prev
+          let bonus = 0; let msg = ""
+          if (ability === "ODEN SWORD") { bonus = 4; msg = `${requiredUnit} +4 DP (Oden Sword)!` }
+          else if (ability === "PROTONIX SWORD") { bonus = 2; msg = `${requiredUnit} +2 DP (Protonix Sword)!` }
+          else if (ability === "TWILIGH AVALON") { bonus = 2; msg = `${requiredUnit} +2 DP (Twiligh Avalon)!` }
+          else if (ability === "ULLRBOGI") { msg = `${requiredUnit} recebera +3 DP nas fases de batalha (Ullrbogi)!` }
+          else if (ability === "KENSEI IFRAID") { bonus = 3; msg = `${requiredUnit} +3 DP (Kensei Ifraid)!` }
+          else if (ability === "MEFISTO FOLES") { bonus = 2; msg = `${requiredUnit} +2 DP (Mefisto Foles)!` }
+          else if (ability === "NIGHTMARE ARMAGEDDON") { bonus = 7; msg = `${requiredUnit} +7 DP (Nightmare Armageddon)!` }
+          else if (ability === "VATNAVORDR MESSIHAM") { bonus = 2; msg = `${requiredUnit} +2 DP (Vatnavordr Messiham)!` }
+          else if (ability === "YGGDRA NIDHOGG") { bonus = 3; msg = `${requiredUnit} +3 DP (Yggdra Nidhogg)!` }
+          if (bonus > 0) newUnits[unitIdx] = { ...unit, currentDp: unit.currentDp + bonus }
+          if (msg) showEffectFeedback(msg, "success")
+          return bonus > 0 ? { ...prev, unitZone: newUnits as (FieldCard | null)[] } : prev
+        })
+      }
+    }
+    prevUnitZoneRef.current = currentNames
+  }, [myField.unitZone, myField.ultimateZone, showEffectFeedback])
 
   // Initialize game
   useEffect(() => {
@@ -1015,7 +1342,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
               unit ? { ...unit, canAttack: newTurn > unit.canAttackTurn, hasAttacked: false } : null
             ),
             ultimateZone: prevField.ultimateZone
-              ? { ...prevField.ultimateZone, canAttack: newTurn > prevField.ultimateZone.canAttackTurn, hasAttacked: false }
+              ? { ...prevField.ultimateZone, canAttack: prevField.ultimateZone.type !== "ultimateGuardian" && newTurn > prevField.ultimateZone.canAttackTurn, hasAttacked: false }
               : null,
           }))
           return newTurn
@@ -1094,6 +1421,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   const playerIdRef = useRef(playerId)
   const attackStateRef = useRef(attackState)
   const attackTargetRef = useRef(attackTarget)
+  const performAttackRef = useRef<(targetType: "direct" | "unit", targetIndex?: number, explicitAttackerIndex?: number, explicitSource?: "unit" | "ultimate") => void>(() => {})
   
   // Keep refs in sync
   useEffect(() => {
@@ -1406,79 +1734,88 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     }
   }, [])
 
-  // Global attack arrow listeners for smoother drag experience
+  // Cache enemy unit positions for fast rect-based hit testing
+  const cacheEnemyRects = useCallback(() => {
+    const enemyUnitElements = document.querySelectorAll("[data-enemy-unit]")
+    enemyUnitRectsRef.current = Array.from(enemyUnitElements).map((el) => el.getBoundingClientRect())
+  }, [])
+
+  // Global attack listeners for smooth drag experience (matches bot mode quality)
   useEffect(() => {
     const handleGlobalAttackMove = (e: MouseEvent | TouchEvent) => {
+      if (!isDraggingRef.current) return
       const currentAttack = attackStateRef.current
       if (!currentAttack.isAttacking) return
 
       e.preventDefault()
-
       const clientX = "touches" in e ? e.touches[0].clientX : (e as MouseEvent).clientX
       const clientY = "touches" in e ? e.touches[0].clientY : (e as MouseEvent).clientY
 
       positionRef.current.currentX = clientX
       positionRef.current.currentY = clientY
 
-      setArrowPos((prev) => ({
-        ...prev,
-        x2: clientX,
-        y2: clientY,
-      }))
+      // Direct state update for immediate arrow response
+      setArrowPos((prev) => ({ ...prev, x2: clientX, y2: clientY }))
 
-      // Check for targets under the pointer
-      const elements = document.elementsFromPoint(clientX, clientY)
-      let newTarget: { type: "direct" | "unit"; index?: number } | null = null
+      // Throttled target detection (50ms) using cached rects
+      const now = Date.now()
+      if (!positionRef.current.lastTargetCheck || now - positionRef.current.lastTargetCheck > 50) {
+        positionRef.current.lastTargetCheck = now
 
-      for (const el of elements) {
-        const enemyUnit = el.closest("[data-enemy-unit]")
-        if (enemyUnit) {
-          const index = Number.parseInt(enemyUnit.getAttribute("data-enemy-unit") || "-1", 10)
-          if (index >= 0 && opponentFieldRef.current.unitZone[index]) {
-            newTarget = { type: "unit", index }
-            break
+        const fieldRect = fieldRef.current?.getBoundingClientRect()
+        if (!fieldRect) return
+
+        const relativeY = clientY - fieldRect.top
+        let foundTarget: { type: "direct" | "unit"; index?: number } | null = null
+
+        // Check upper half for enemy units (using cached rects)
+        if (relativeY < fieldRect.height / 2) {
+          for (let idx = 0; idx < enemyUnitRectsRef.current.length; idx++) {
+            const rect = enemyUnitRectsRef.current[idx]
+            if (clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom) {
+              if (opponentFieldRef.current.unitZone[idx]) {
+                foundTarget = { type: "unit", index: idx }
+                break
+              }
+            }
+          }
+          // Check for direct attack if no enemy units on field
+          if (!foundTarget) {
+            const hasEnemyUnits = opponentFieldRef.current.unitZone.some((u) => u !== null)
+            if (!hasEnemyUnits) foundTarget = { type: "direct" }
           }
         }
-        if (el.closest("[data-direct-attack]")) {
-          newTarget = { type: "direct" }
-          break
-        }
-      }
 
-      // Auto-target direct attack if opponent has no units
-      if (!newTarget) {
-        const hasEnemyUnits = opponentFieldRef.current.unitZone.some((u) => u !== null)
-        if (!hasEnemyUnits) {
-          newTarget = { type: "direct" }
-        }
+        setAttackTarget(foundTarget)
       }
-
-      setAttackTarget(newTarget)
     }
 
+    // Global end handlers so releasing anywhere resolves the attack
     const handleGlobalAttackEnd = () => {
-      const currentAttack = attackStateRef.current
-      if (!currentAttack.isAttacking || currentAttack.attackerIndex === null) return
+      if (!isDraggingRef.current) return
+      isDraggingRef.current = false
 
-      const currentTarget = attackTargetRef.current
-      if (currentTarget) {
-        // We need to call performAttack but it reads from attackState which is stale
-        // Instead, dispatch via a custom event that the component picks up
-        // Or simply call the handlers inline
-        setAttackState((prev) => {
-          // Trigger attack resolution in next render cycle
-          return prev
-        })
+      const currentAttack = attackStateRef.current
+      if (currentAttack.isAttacking && currentAttack.attackerIndex !== null) {
+        const currentTarget = attackTargetRef.current
+        if (currentTarget) {
+          performAttackRef.current(currentTarget.type, currentTarget.index, currentAttack.attackerIndex, currentAttack.attackerSource)
+        }
       }
-      // The actual end handling happens via handleAttackEnd called from onMouseUp/onTouchEnd
+      setAttackState({ isAttacking: false, attackerIndex: null, attackerSource: "unit", targetInfo: null })
+      setAttackTarget(null)
     }
 
     window.addEventListener("mousemove", handleGlobalAttackMove, { passive: false })
     window.addEventListener("touchmove", handleGlobalAttackMove, { passive: false })
+    window.addEventListener("mouseup", handleGlobalAttackEnd)
+    window.addEventListener("touchend", handleGlobalAttackEnd)
 
     return () => {
       window.removeEventListener("mousemove", handleGlobalAttackMove)
       window.removeEventListener("touchmove", handleGlobalAttackMove)
+      window.removeEventListener("mouseup", handleGlobalAttackEnd)
+      window.removeEventListener("touchend", handleGlobalAttackEnd)
     }
   }, [])
 
@@ -1499,8 +1836,9 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     }
   }
 
-  // Can unit attack now?
+  // Can unit attack now? Guardians can never attack (they have 0 DP and are support-only)
   const canUnitAttackNow = (card: FieldCard): boolean => {
+    if (card.type === "ultimateGuardian") return false
     return isMyTurn && phase === "battle" && card.canAttack && !card.hasAttacked && turn > card.canAttackTurn
   }
 
@@ -1714,12 +2052,25 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     if (phase === "draw") {
       drawCard()
     } else if (phase === "main") {
+      // ULLRBOGI: +3 DP to required unit when entering battle phase
+      if (myField.ultimateZone?.ability === "ULLRBOGI" && myField.ultimateZone.requiresUnit) {
+        const ullrName = myField.ultimateZone.requiresUnit
+        const ullrIdx = myField.unitZone.findIndex((u) => u && u.name === ullrName)
+        if (ullrIdx !== -1) {
+          setMyField((prev) => {
+            const newUnits = [...prev.unitZone]; const unit = newUnits[ullrIdx]
+            if (unit) { newUnits[ullrIdx] = { ...unit, currentDp: unit.currentDp + 3 } }
+            return { ...prev, unitZone: newUnits as (FieldCard | null)[] }
+          })
+          showEffectFeedback(`ULLRBOGI: ${ullrName} +3 DP na fase de batalha!`, "success")
+        }
+      }
       setPhase("battle")
-      // Enable units to attack that were placed in previous turns
+      // Enable units to attack that were placed in previous turns (not Guardians)
       setMyField((prev) => ({
         ...prev,
         unitZone: prev.unitZone.map((unit) => (unit && turn > unit.canAttackTurn ? { ...unit, canAttack: true } : unit)),
-        ultimateZone: prev.ultimateZone && turn > prev.ultimateZone.canAttackTurn
+        ultimateZone: prev.ultimateZone && prev.ultimateZone.type !== "ultimateGuardian" && turn > prev.ultimateZone.canAttackTurn
           ? { ...prev.ultimateZone, canAttack: true }
           : prev.ultimateZone,
       }))
@@ -2043,61 +2394,37 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     setDropTarget(null)
   }
 
-  // Attack handlers
+  // Attack handlers - uses isDraggingRef + cached rects for smooth performance (matches bot mode)
   const handleAttackStart = (unitIndex: number, e: React.MouseEvent | React.TouchEvent, source: "unit" | "ultimate" = "unit") => {
     if (!isMyTurn || phase !== "battle") return
 
     const unit = source === "ultimate" ? myField.ultimateZone : myField.unitZone[unitIndex]
     if (!unit || !canUnitAttackNow(unit)) return
 
+    e.preventDefault()
+    e.stopPropagation()
+
     const clientX = "touches" in e ? e.touches[0].clientX : e.clientX
     const clientY = "touches" in e ? e.touches[0].clientY : e.clientY
 
-    positionRef.current = {
-      startX: clientX,
-      startY: clientY,
-      currentX: clientX,
-      currentY: clientY,
-    }
+    isDraggingRef.current = true
+    positionRef.current = { startX: clientX, startY: clientY, currentX: clientX, currentY: clientY, lastTargetCheck: 0 }
+    cacheEnemyRects()
 
-    setArrowPos({
-      x1: clientX,
-      y1: clientY,
-      x2: clientX,
-      y2: clientY,
-    })
-
-    setAttackState({
-      isAttacking: true,
-      attackerIndex: unitIndex,
-      attackerSource: source,
-      targetInfo: null,
-    })
+    setArrowPos({ x1: clientX, y1: clientY, x2: clientX, y2: clientY })
+    setAttackState({ isAttacking: true, attackerIndex: unitIndex, attackerSource: source, targetInfo: null })
   }
 
-  // handleAttackMove is now handled by global listeners for better responsiveness.
-  // Inline version kept as fallback but delegates to same ref-based logic.
-  const handleAttackMove = (_e: React.MouseEvent | React.TouchEvent) => {
-    // Global listener already handles this - no-op to avoid double processing
-  }
-
+  // handleAttackMove/End are handled by global listeners.
+  // Inline versions kept as no-ops since global listeners handle everything.
+  const handleAttackMove = (_e: React.MouseEvent | React.TouchEvent) => {}
   const handleAttackEnd = () => {
-    if (!attackState.isAttacking || attackState.attackerIndex === null) {
-      setAttackState({ isAttacking: false, attackerIndex: null, attackerSource: "unit", targetInfo: null })
-      setAttackTarget(null)
-      return
+    // Global listener handles this - but if it somehow fires inline, clean up
+    if (!isDraggingRef.current) return
+    isDraggingRef.current = false
+    if (attackState.isAttacking && attackState.attackerIndex !== null && attackTarget) {
+      performAttack(attackTarget.type, attackTarget.index, attackState.attackerIndex, attackState.attackerSource)
     }
-
-    // Resolve attack if we have a valid target
-    if (attackTarget) {
-      performAttack(
-        attackTarget.type,
-        attackTarget.index,
-        attackState.attackerIndex,
-        attackState.attackerSource,
-      )
-    }
-
     setAttackState({ isAttacking: false, attackerIndex: null, attackerSource: "unit", targetInfo: null })
     setAttackTarget(null)
   }
@@ -2145,6 +2472,11 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     }
 
     if (targetType === "direct") {
+      // Trigger explosion on direct attack zone
+      const directZone = document.querySelector("[data-direct-attack]")
+      const directRect = directZone?.getBoundingClientRect()
+      if (directRect) triggerExplosion(directRect.left + directRect.width / 2, directRect.top + directRect.height / 2, attacker.element || "neutral")
+
       setOpponentField((prev) => ({
         ...prev,
         life: Math.max(0, prev.life - damage),
@@ -2163,6 +2495,11 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       if (!currentTarget) return
 
       const targetDp = currentTarget.currentDp
+
+      // Trigger explosion on target unit
+      const targetEl = document.querySelector(`[data-enemy-unit="${targetIndex}"]`)
+      const targetRect = targetEl?.getBoundingClientRect()
+      if (targetRect) triggerExplosion(targetRect.left + targetRect.width / 2, targetRect.top + targetRect.height / 2, attacker.element || "neutral")
 
       // Apply damage to opponent's unit
       setOpponentField((prev) => {
@@ -2192,13 +2529,40 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       })
     }
 
+    // ISGRIMM FENRIR: when equipped Ventus unit attacks, another Ventus unit gets +2 DP
+    if (myFieldRef.current.ultimateZone?.ability === "ISGRIMM FENRIR" && attacker.element === "Ventus") {
+      setMyField((prev) => {
+        const newUnits = [...prev.unitZone]; let buffed = false
+        for (let idx = 0; idx < newUnits.length; idx++) {
+          const u = newUnits[idx]
+          if (u && u.element === "Ventus" && idx !== attackerIdx) { newUnits[idx] = { ...u, currentDp: u.currentDp + 2 }; buffed = true; showEffectFeedback(`ISGRIMM FENRIR: ${u.name} +2 DP!`, "success"); break }
+        }
+        return buffed ? { ...prev, unitZone: newUnits as (FieldCard | null)[] } : prev
+      })
+    }
+
     // Defer game over check so state updates flush first
     setTimeout(() => checkGameOver(), 0)
   }
+  // Keep ref in sync for global listeners
+  performAttackRef.current = performAttack
 
   // End turn
   const endTurn = () => {
     if (!isMyTurn) return
+
+    // ULLRBOGI: remove +3 DP when leaving battle phase
+    if (myField.ultimateZone?.ability === "ULLRBOGI" && myField.ultimateZone.requiresUnit) {
+      const ullrName = myField.ultimateZone.requiresUnit
+      const ullrIdx = myField.unitZone.findIndex((u) => u && u.name === ullrName)
+      if (ullrIdx !== -1) {
+        setMyField((prev) => {
+          const newUnits = [...prev.unitZone]; const unit = newUnits[ullrIdx]
+          if (unit) { newUnits[ullrIdx] = { ...unit, currentDp: Math.max(0, unit.currentDp - 3) } }
+          return { ...prev, unitZone: newUnits as (FieldCard | null)[] }
+        })
+      }
+    }
 
     setIsMyTurn(false)
     setPhase("end")
@@ -2211,11 +2575,13 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       ultimateZone: prev.ultimateZone ? { ...prev.ultimateZone, canAttack: false, hasAttacked: false } : null,
     }))
 
-    // Enable opponent's units (immutable)
+    // Enable opponent's units (immutable) - Guardians cannot attack
     setOpponentField((prev) => ({
       ...prev,
       unitZone: prev.unitZone.map((unit) => (unit ? { ...unit, canAttack: true, hasAttacked: false } : null)),
-      ultimateZone: prev.ultimateZone ? { ...prev.ultimateZone, canAttack: true, hasAttacked: false } : null,
+      ultimateZone: prev.ultimateZone
+        ? { ...prev.ultimateZone, canAttack: prev.ultimateZone.type !== "ultimateGuardian", hasAttacked: false }
+        : null,
     }))
 
     sendAction({
@@ -2374,6 +2740,18 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
           backgroundSize: "50px 50px",
         }}
       />
+
+      {/* Explosion Canvas */}
+      <canvas
+        ref={explosionCanvasRef}
+        className="fixed inset-0 pointer-events-none z-[60]"
+        style={{ width: "100vw", height: "100vh" }}
+      />
+
+      {/* Impact Flash Overlay */}
+      {impactFlash.active && (
+        <div className="fixed inset-0 pointer-events-none z-[59] transition-opacity duration-200" style={{ backgroundColor: impactFlash.color }} />
+      )}
 
       {/* Attack Arrow */}
       {attackState.isAttacking && (
