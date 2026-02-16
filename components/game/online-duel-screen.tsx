@@ -220,7 +220,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       cardImage: card.image,
       cardType: card.type,
     })
-    setTimeout(() => setDrawAnimation(null), 1800)
+    setTimeout(() => setDrawAnimation(null), 1300)
   }, [])
 
   // Get my deck and opponent deck
@@ -2293,7 +2293,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     
     {/* Card name - appears at peak */}
     <div className="draw-card-name">
-      <span className="text-cyan-300 font-bold text-base md:text-lg drop-shadow-[0_0_8px_rgba(56,189,248,0.8)]">
+      <span className="text-white font-bold text-sm drop-shadow-lg">
         {drawAnimation.cardName}
       </span>
     </div>
