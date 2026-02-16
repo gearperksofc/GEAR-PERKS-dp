@@ -779,15 +779,17 @@
 
 .draw-card-name {
   position: absolute;
-  bottom: 40%;
+  bottom: 52%;
   left: 50%;
   transform: translateX(-50%);
-  padding: 6px 16px;
-  background: rgba(15, 23, 42, 0.9);
-  border: 1px solid rgba(56, 189, 248, 0.5);
+  padding: 8px 20px;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(56, 189, 248, 0.7);
   border-radius: 8px;
-  animation: draw-name 1.2s ease-out forwards;
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.4), 0 0 40px rgba(56, 189, 248, 0.2);
+  animation: draw-name 1.8s ease-out forwards;
   white-space: nowrap;
+  z-index: 50;
 }
 
 @keyframes draw-path {
@@ -871,21 +873,21 @@
 }
 
 @keyframes draw-name {
-  0%, 35% {
+  0%, 20% {
     opacity: 0;
-    transform: translateX(-50%) translateY(10px);
+    transform: translateX(-50%) translateY(10px) scale(0.9);
   }
-  50% {
+  30% {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateX(-50%) translateY(0) scale(1.05);
   }
-  80% {
+  40%, 80% {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: translateX(-50%) translateY(0) scale(1);
   }
   100% {
     opacity: 0;
-    transform: translateX(-50%) translateY(-10px);
+    transform: translateX(-50%) translateY(-10px) scale(0.9);
   }
 }
 
