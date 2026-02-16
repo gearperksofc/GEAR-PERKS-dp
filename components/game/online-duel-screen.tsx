@@ -554,6 +554,7 @@ const isUnitCard = (card: GameCard | null): boolean => {
   if (!card) return false
   return (
     card.type === "unit" ||
+    card.type === "troops" ||
     card.type === "ultimateGear" ||
     card.type === "ultimateGuardian" ||
     card.type === "ultimateElemental"
@@ -1294,8 +1295,75 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
           }
         } else if (targetType === "function" && !isUnitCard(cardToPlay) && cardToPlay.type !== "scenario") {
           if (!currentField.functionZone[targetIndex]) {
-            // Delegate to placeCard so that effect detection works for dragged cards too
-            placeCard("function", targetIndex, cardIndex)
+            // Check if this function card has an activatable effect (centralized registry)
+            const effect = getPvPFunctionCardEffect(cardToPlay)
+            if (effect) {
+              const activationCheck = effect.canActivate({
+                playerField: currentField,
+                enemyField: opponentFieldRef.current,
+                setPlayerField: setMyField,
+                setEnemyField: setOpponentField,
+              })
+
+              if (!activationCheck.canActivate) {
+                showEffectFeedback(`${cardToPlay.name}: ${activationCheck.reason}`, "error")
+              } else {
+                // Remove from hand first
+                setMyField((prev) => ({ ...prev, hand: prev.hand.filter((_, i) => i !== cardIndex) }))
+
+                // For effects needing interaction (choice, dice, target selection), enter itemSelectionMode
+                if (effect.requiresChoice && effect.choiceOptions) {
+                  setItemSelectionMode({
+                    active: true, itemCard: cardToPlay, effect, step: "choice",
+                    selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: cardIndex,
+                  })
+                } else if (effect.requiresDice) {
+                  setItemSelectionMode({
+                    active: true, itemCard: cardToPlay, effect, step: "dice",
+                    selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: cardIndex,
+                  })
+                } else if (effect.requiresTargets) {
+                  const needsEnemy = effect.targetConfig?.enemyUnits && effect.targetConfig.enemyUnits > 0
+                  const needsAlly = effect.targetConfig?.allyUnits && effect.targetConfig.allyUnits > 0
+                  const hasEnemyUnits = opponentFieldRef.current.unitZone.some((u) => u !== null)
+
+                  if (needsEnemy && hasEnemyUnits) {
+                    setItemSelectionMode({
+                      active: true, itemCard: cardToPlay, effect, step: "selectEnemy",
+                      selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: cardIndex,
+                    })
+                  } else if (needsAlly) {
+                    setItemSelectionMode({
+                      active: true, itemCard: cardToPlay, effect, step: "selectAlly",
+                      selectedEnemyIndex: null, selectedAllyIndex: null, chosenOption: null, diceResult: null, handIndex: cardIndex,
+                    })
+                  } else {
+                    // Set handIndex in selection mode before resolving so error recovery works
+                    setItemSelectionMode((prev) => ({ ...prev, handIndex: cardIndex }))
+                    resolveFullEffect(cardToPlay, effect, {})
+                  }
+                } else {
+                  // No targets needed - set handIndex then resolve immediately
+                  setItemSelectionMode((prev) => ({ ...prev, handIndex: cardIndex }))
+                  resolveFullEffect(cardToPlay, effect, {})
+                }
+              }
+            } else {
+              // No registered effect -- place as a passive function card directly
+              setMyField((prev) => {
+                const newHand = prev.hand.filter((_, i) => i !== cardIndex)
+                const newFunctionZone = [...prev.functionZone]
+                if (newFunctionZone[targetIndex] !== null) return prev
+                newFunctionZone[targetIndex] = cardToPlay
+                return { ...prev, functionZone: newFunctionZone, hand: newHand }
+              })
+              currentSendAction({
+                type: "place_card",
+                playerId: currentPlayerId,
+                data: { zone: "function", index: targetIndex, card: cardToPlay },
+                timestamp: Date.now(),
+              })
+            }
           }
         }
         
@@ -1318,7 +1386,9 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         }
       }
 
-      // Always clear drag state
+      // Always clear drag state - clear ref immediately to prevent inline handler double-fire
+      draggedHandCardRef2.current = null
+      dropTargetRef.current = null
       setDraggedHandCard(null)
       setDropTarget(null)
     }
@@ -1662,12 +1732,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     }
   }
 
-  // Place a card
+  // Place a card - uses refs to avoid stale closure issues when called from global handlers
   const placeCard = (zone: "unit" | "function", index: number, forcedCardIndex?: number) => {
     const cardIndex = forcedCardIndex ?? (draggedHandCard?.index ?? selectedHandCard)
     if (!isMyTurn || phase !== "main" || cardIndex === null) return
 
-    const card = myField.hand[cardIndex]
+    // Read from ref for fresh data (critical when called from global drag-end handlers)
+    const currentField = myFieldRef.current
+    const card = currentField.hand[cardIndex]
     if (!card) return
 
     // Check zone compatibility
@@ -1774,9 +1846,10 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     const cardIndex = forcedCardIndex ?? (draggedHandCard?.index ?? selectedHandCard)
     if (!isMyTurn || phase !== "main" || cardIndex === null) return
 
-    const card = myField.hand[cardIndex]
+    const currentField = myFieldRef.current
+    const card = currentField.hand[cardIndex]
     if (!card || !isUltimateCard(card)) return
-    if (myField.ultimateZone !== null) return
+    if (currentField.ultimateZone !== null) return
 
     setMyField((prev) => {
       const newHand = prev.hand.filter((_, i) => i !== cardIndex)
@@ -1808,9 +1881,10 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     const cardIndex = forcedCardIndex ?? (draggedHandCard?.index ?? selectedHandCard)
     if (!isMyTurn || phase !== "main" || cardIndex === null) return
 
-    const card = myField.hand[cardIndex]
+    const currentField = myFieldRef.current
+    const card = currentField.hand[cardIndex]
     if (!card || card.type !== "scenario") return
-    if (myField.scenarioZone !== null) return // Already has scenario
+    if (currentField.scenarioZone !== null) return // Already has scenario
 
     setMyField((prev) => {
       const newHand = prev.hand.filter((_, i) => i !== cardIndex)
@@ -1914,7 +1988,8 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   }
 
   const handleHandCardDragEnd = () => {
-    if (!draggedHandCard) {
+    // Skip if global handler already processed this drop (ref was cleared)
+    if (!draggedHandCard || !draggedHandCardRef2.current) {
       setDropTarget(null)
       return
     }
