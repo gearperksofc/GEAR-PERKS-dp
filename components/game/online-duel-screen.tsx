@@ -3485,7 +3485,6 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                     const canUltimateAttack = myField.ultimateZone && canUnitAttackNow(myField.ultimateZone)
 
                     return (
-                      <>
                       <div
                         data-player-ultimate-slot
                         onClick={() => {
@@ -3563,7 +3562,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                           ATIVAR
                         </button>
                       )}
-                    </>
+                    )
                   })()}
                 </div>
                 <div className="flex flex-col gap-1">
