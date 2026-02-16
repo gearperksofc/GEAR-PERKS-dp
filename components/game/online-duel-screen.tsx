@@ -1234,12 +1234,30 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         const { attackerIndex, attackerSource, targetType, targetIndex, damage } = action.data
         const isUltimateAttacker = attackerSource === "ultimate"
 
+        // Determine attacker element for explosion animation
+        const attackerUnit = isUltimateAttacker
+          ? opponentFieldRef.current.ultimateZone
+          : opponentFieldRef.current.unitZone[attackerIndex]
+        const attackerElement = attackerUnit?.element || "neutral"
+
         if (targetType === "direct") {
+          // Explosion on our life zone
+          setTimeout(() => {
+            const lifeZone = document.querySelector("[data-player-life]")
+            const lifeRect = lifeZone?.getBoundingClientRect()
+            if (lifeRect) triggerExplosion(lifeRect.left + lifeRect.width / 2, lifeRect.top + lifeRect.height / 2, attackerElement)
+          }, 100)
           setMyField((prev) => ({
             ...prev,
             life: Math.max(0, prev.life - damage),
           }))
         } else if (targetType === "unit") {
+          // Explosion on our unit
+          setTimeout(() => {
+            const el = document.querySelector(`[data-player-unit-slot="${targetIndex}"]`)
+            const rect = el?.getBoundingClientRect()
+            if (rect) triggerExplosion(rect.left + rect.width / 2, rect.top + rect.height / 2, attackerElement)
+          }, 100)
           // Apply damage to my unit
           setMyField((prev) => {
             const newUnitZone = [...prev.unitZone]
@@ -3284,8 +3302,17 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                                 {t("dragToAttack")}
                               </div>
                             )}
+                            {myField.ultimateZone.type === "ultimateGuardian" && (
+                              <div className="absolute top-0 left-0 right-0 bg-blue-600/90 text-white text-[8px] text-center font-bold">
+                                GUARDIAN
+                              </div>
+                            )}
                             <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-center text-xs text-white font-bold py-0.5">
-                              {myField.ultimateZone.currentDp} DP
+                              {myField.ultimateZone.type === "ultimateGuardian" ? (
+                                <span className="text-blue-300">{myField.ultimateZone.ability || "GUARD"}</span>
+                              ) : (
+                                <>{myField.ultimateZone.currentDp} DP</>
+                              )}
                             </div>
                           </>
                         ) : null}
@@ -3323,7 +3350,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
             </div>
             <div>
               <span className="text-xs text-slate-400">{playerProfile.name}</span>
-              <div className="text-xl font-bold text-blue-400">LP: {myField.life}</div>
+              <div className="text-xl font-bold text-blue-400" data-player-life>LP: {myField.life}</div>
             </div>
           </div>
 
@@ -3661,9 +3688,9 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       </div>
     </div>
     
-    {/* Card name - appears at peak */}
+    {/* Card name - appears at peak with glow effect */}
     <div className="draw-card-name">
-      <span className="text-white font-bold text-sm drop-shadow-lg">
+      <span className="text-cyan-300 font-bold text-base md:text-lg drop-shadow-[0_0_8px_rgba(56,189,248,0.8)]">
         {drawAnimation.cardName}
       </span>
     </div>
