@@ -903,7 +903,8 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
         break
 
       case "attack": {
-        const { attackerIndex, targetType, targetIndex, damage } = action.data
+        const { attackerIndex, attackerSource, targetType, targetIndex, damage } = action.data
+        const isUltimateAttacker = attackerSource === "ultimate"
 
         if (targetType === "direct") {
           setMyField((prev) => ({
@@ -911,7 +912,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
             life: Math.max(0, prev.life - damage),
           }))
         } else if (targetType === "unit") {
-          // Apply damage to my unit (immutable update)
+          // Apply damage to my unit
           setMyField((prev) => {
             const newUnitZone = [...prev.unitZone]
             const newGraveyard = [...prev.graveyard]
@@ -928,26 +929,38 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
             return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
           })
 
-          // Attacker takes counter damage (immutable update)
+          // Attacker takes counter damage
           setOpponentField((prev) => {
-            const newUnitZone = [...prev.unitZone]
-            const newGraveyard = [...prev.graveyard]
-            const attacker = newUnitZone[attackerIndex]
-            if (attacker && action.data.counterDamage) {
-              const newDp = attacker.currentDp - action.data.counterDamage
+            if (isUltimateAttacker && prev.ultimateZone && action.data.counterDamage) {
+              const newDp = prev.ultimateZone.currentDp - action.data.counterDamage
+              const updated = { ...prev.ultimateZone, currentDp: newDp, hasAttacked: true, canAttack: false }
               if (newDp <= 0) {
-                newGraveyard.push({ ...attacker, currentDp: 0 })
-                newUnitZone[attackerIndex] = null
-              } else {
-                newUnitZone[attackerIndex] = { ...attacker, currentDp: newDp }
+                return { ...prev, ultimateZone: null, graveyard: [...prev.graveyard, { ...updated, currentDp: 0 }] }
               }
+              return { ...prev, ultimateZone: updated }
+            } else {
+              const newUnitZone = [...prev.unitZone]
+              const newGraveyard = [...prev.graveyard]
+              const attacker = newUnitZone[attackerIndex]
+              if (attacker && action.data.counterDamage) {
+                const newDp = attacker.currentDp - action.data.counterDamage
+                if (newDp <= 0) {
+                  newGraveyard.push({ ...attacker, currentDp: 0 })
+                  newUnitZone[attackerIndex] = null
+                } else {
+                  newUnitZone[attackerIndex] = { ...attacker, currentDp: newDp }
+                }
+              }
+              return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
             }
-            return { ...prev, unitZone: newUnitZone, graveyard: newGraveyard }
           })
         }
 
-        // Mark attacker as having attacked (immutable)
+        // Mark attacker as having attacked
         setOpponentField((prev) => {
+          if (isUltimateAttacker && prev.ultimateZone) {
+            return { ...prev, ultimateZone: { ...prev.ultimateZone, hasAttacked: true, canAttack: false } }
+          }
           const newUnitZone = [...prev.unitZone]
           const attacker = newUnitZone[attackerIndex]
           if (attacker) {
@@ -1390,52 +1403,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       // The actual end handling happens via handleAttackEnd called from onMouseUp/onTouchEnd
     }
 
-    // Global end handlers so releasing anywhere works
-    const handleGlobalAttackEndMouse = () => {
-      const currentAttack = attackStateRef.current
-      if (!currentAttack.isAttacking) return
-      // Delegate to React state via a flag
-      setAttackState((prev) => {
-        if (!prev.isAttacking) return prev
-        return { ...prev, isAttacking: false } // Will be caught by the effect below
-      })
-    }
-
-    const handleGlobalAttackEndTouch = () => {
-      const currentAttack = attackStateRef.current
-      if (!currentAttack.isAttacking) return
-      setAttackState((prev) => {
-        if (!prev.isAttacking) return prev
-        return { ...prev, isAttacking: false }
-      })
-    }
-
     window.addEventListener("mousemove", handleGlobalAttackMove, { passive: false })
     window.addEventListener("touchmove", handleGlobalAttackMove, { passive: false })
-    window.addEventListener("mouseup", handleGlobalAttackEndMouse)
-    window.addEventListener("touchend", handleGlobalAttackEndTouch)
 
     return () => {
       window.removeEventListener("mousemove", handleGlobalAttackMove)
       window.removeEventListener("touchmove", handleGlobalAttackMove)
-      window.removeEventListener("mouseup", handleGlobalAttackEndMouse)
-      window.removeEventListener("touchend", handleGlobalAttackEndTouch)
     }
   }, [])
-
-  // Effect to resolve attack when attackState transitions from isAttacking=true to false
-  const prevAttackingRef = useRef(false)
-  useEffect(() => {
-    if (prevAttackingRef.current && !attackState.isAttacking && attackState.attackerIndex !== null) {
-      // Attack just ended - resolve
-      if (attackTargetRef.current) {
-        performAttack(attackTargetRef.current.type, attackTargetRef.current.index)
-      }
-      setAttackState({ isAttacking: false, attackerIndex: null, attackerSource: "unit", targetInfo: null })
-      setAttackTarget(null)
-    }
-    prevAttackingRef.current = attackState.isAttacking
-  }, [attackState.isAttacking])
 
   // Card inspection handlers
   const handleCardPressStart = (card: GameCard) => {
@@ -2025,50 +2000,10 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
     })
   }
 
-  const handleAttackMove = (e: React.MouseEvent | React.TouchEvent) => {
-    if (!attackState.isAttacking) return
-
-    const clientX = "touches" in e ? e.touches[0].clientX : e.clientX
-    const clientY = "touches" in e ? e.touches[0].clientY : e.clientY
-
-    positionRef.current.currentX = clientX
-    positionRef.current.currentY = clientY
-
-    setArrowPos((prev) => ({
-      ...prev,
-      x2: clientX,
-      y2: clientY,
-    }))
-
-    // Check for targets
-    const elements = document.elementsFromPoint(clientX, clientY)
-    let newTarget: { type: "direct" | "unit"; index?: number } | null = null
-
-    for (const el of elements) {
-      const enemyUnit = el.closest("[data-enemy-unit]")
-      if (enemyUnit) {
-        const index = Number.parseInt(enemyUnit.getAttribute("data-enemy-unit") || "-1", 10)
-        if (index >= 0 && opponentField.unitZone[index]) {
-          newTarget = { type: "unit", index }
-          break
-        }
-      }
-
-      if (el.closest("[data-direct-attack]")) {
-        newTarget = { type: "direct" }
-        break
-      }
-    }
-
-    // Auto-target direct attack if opponent has no units on the field
-    if (!newTarget) {
-      const hasEnemyUnits = opponentField.unitZone.some((u) => u !== null)
-      if (!hasEnemyUnits) {
-        newTarget = { type: "direct" }
-      }
-    }
-
-    setAttackTarget(newTarget)
+  // handleAttackMove is now handled by global listeners for better responsiveness.
+  // Inline version kept as fallback but delegates to same ref-based logic.
+  const handleAttackMove = (_e: React.MouseEvent | React.TouchEvent) => {
+    // Global listener already handles this - no-op to avoid double processing
   }
 
   const handleAttackEnd = () => {
@@ -2078,8 +2013,14 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
       return
     }
 
+    // Resolve attack if we have a valid target
     if (attackTarget) {
-      performAttack(attackTarget.type, attackTarget.index)
+      performAttack(
+        attackTarget.type,
+        attackTarget.index,
+        attackState.attackerIndex,
+        attackState.attackerSource,
+      )
     }
 
     setAttackState({ isAttacking: false, attackerIndex: null, attackerSource: "unit", targetInfo: null })
@@ -2087,15 +2028,17 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
   }
 
   // Perform attack - supports both unit zone and ultimate zone attackers
-  const performAttack = (targetType: "direct" | "unit", targetIndex?: number) => {
-    if (!isMyTurn || phase !== "battle" || attackState.attackerIndex === null) return
+  // Accepts explicit attacker info to avoid stale closure issues
+  const performAttack = (targetType: "direct" | "unit", targetIndex?: number, explicitAttackerIndex?: number, explicitSource?: "unit" | "ultimate") => {
+    const attackerIdx = explicitAttackerIndex ?? attackStateRef.current.attackerIndex
+    const source = explicitSource ?? attackStateRef.current.attackerSource
+    if (!isMyTurn || phase !== "battle" || attackerIdx === null) return
 
-    const isUltimateAttacker = attackState.attackerSource === "ultimate"
-    const attacker = isUltimateAttacker ? myFieldRef.current.ultimateZone : myFieldRef.current.unitZone[attackState.attackerIndex]
+    const isUltimateAttacker = source === "ultimate"
+    const attacker = isUltimateAttacker ? myFieldRef.current.ultimateZone : myFieldRef.current.unitZone[attackerIdx]
     if (!attacker || !attacker.canAttack || attacker.hasAttacked) return
 
     const damage = attacker.currentDp
-    const attackerIdx = attackState.attackerIndex
 
     // Helper to mark the attacker as having attacked
     const markAttackerDone = (counterDamage?: number) => {
