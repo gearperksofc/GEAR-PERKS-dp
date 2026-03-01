@@ -11,6 +11,8 @@ import DuelScreen from "./duel-screen"
 import HistoryScreen from "./history-screen"
 import SettingsScreen from "./settings-screen"
 import FriendsScreen from "./friends-screen"
+import { MultiplayerLobby } from "./multiplayer-lobby"
+import { OnlineDuelScreen } from "./online-duel-screen"
 
 export type GameScreen =
   | "menu"
@@ -23,7 +25,24 @@ export type GameScreen =
   | "settings"
   | "create-room"
   | "join-room"
+  | "duel-online"
   | "friends"
+
+interface RoomData {
+  roomId: string
+  roomCode: string
+  isHost: boolean
+  hostId: string
+  hostName: string
+  hostDeck: any
+  hostAvatar?: string | null
+  guestId: string | null
+  guestName: string | null
+  guestDeck: any
+  guestAvatar?: string | null
+  hostReady: boolean
+  guestReady: boolean
+}
 
 export function GameWrapper() {
   const { playerProfile, mobileMode } = useGame()
@@ -32,6 +51,7 @@ export function GameWrapper() {
   const [showSetup, setShowSetup] = useState(false)
   const [isLoaded, setIsLoaded] = useState(false)
   const [menuMessage, setMenuMessage] = useState<string | null>(null)
+  const [onlineRoomData, setOnlineRoomData] = useState<RoomData | null>(null)
 
   // Toggle mobile-mode class on html element
   useEffect(() => {
@@ -61,11 +81,21 @@ export function GameWrapper() {
       setDuelMode("bot")
       setCurrentScreen("duel-bot")
     } else if (screen === "duel-player") {
-      setDuelMode("player")
-      setCurrentScreen("duel-player")
+      // "duel-player" agora vai para o lobby multiplayer
+      setCurrentScreen("create-room")
     } else {
       setCurrentScreen(screen)
     }
+  }
+
+  const handleStartOnlineDuel = (roomData: RoomData) => {
+    setOnlineRoomData(roomData)
+    setCurrentScreen("duel-online")
+  }
+
+  const handleBackFromOnlineDuel = () => {
+    setOnlineRoomData(null)
+    setCurrentScreen("menu")
   }
 
   const handleSetupComplete = () => {
@@ -104,6 +134,18 @@ export function GameWrapper() {
         navigateTo("menu")
       }} />}
       {currentScreen === "friends" && <FriendsScreen onBack={() => navigateTo("menu")} />}
+      {(currentScreen === "create-room" || currentScreen === "join-room") && (
+        <MultiplayerLobby
+          onBack={() => navigateTo("menu")}
+          onStartDuel={handleStartOnlineDuel}
+        />
+      )}
+      {currentScreen === "duel-online" && onlineRoomData && (
+        <OnlineDuelScreen
+          roomData={onlineRoomData}
+          onBack={handleBackFromOnlineDuel}
+        />
+      )}
     </>
   )
 }
