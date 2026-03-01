@@ -3564,6 +3564,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                         </button>
                       )}
                       </div>
+                    )
                   })()}
                 </div>
                 <div className="flex flex-col gap-1">
