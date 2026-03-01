@@ -3472,100 +3472,89 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                     )
                   })()}
                   {/* Player Ultimate Zone */}
-                  {(() => {
-                    const isSelectedUltimate =
-                      selectedHandCard !== null &&
-                      myField.hand[selectedHandCard] &&
-                      isUltimateCard(myField.hand[selectedHandCard]) &&
-                      !myField.ultimateZone
-                    const isDragUltimate =
-                      draggedHandCard && isUltimateCard(draggedHandCard.card) && !myField.ultimateZone
-                    const isDroppingUltimate = dropTarget?.type === "ultimate"
-                    const isValidUltimateTarget = isSelectedUltimate || isDragUltimate
-                    const canUltimateAttack = myField.ultimateZone && canUnitAttackNow(myField.ultimateZone)
-
-                    return (
-                      <div className="flex flex-col items-center">
-                      <div
-                        data-player-ultimate-slot
-                        onClick={() => {
-                          if (selectedHandCard !== null && myField.hand[selectedHandCard] && isUltimateCard(myField.hand[selectedHandCard]) && !draggedHandCard) {
-                            placeUltimateCard()
-                          }
-                        }}
-                        className={`w-14 h-20 bg-emerald-900/30 border-2 rounded flex items-center justify-center relative overflow-hidden transition-all duration-200 mx-auto ${
-                          isDroppingUltimate
-                            ? "border-green-400 bg-green-500/60 scale-110 shadow-lg shadow-green-500/50 ring-2 ring-green-400/50 animate-pulse"
-                            : isValidUltimateTarget
-                              ? "border-emerald-400 bg-emerald-900/40 cursor-pointer"
-                              : canUltimateAttack
-                                ? "border-yellow-400 shadow-lg shadow-yellow-500/40"
-                                : "border-emerald-600/40"
-                        }`}
-                      >
-                        {canUltimateAttack && (
-                          <div className="absolute -inset-1 bg-yellow-400/40 rounded blur-sm animate-pulse -z-10" />
-                        )}
-                        {myField.ultimateZone ? (
-                          <>
-                            <Image
-                              src={myField.ultimateZone.image || "/placeholder.svg"}
-                              alt={myField.ultimateZone.name}
-                              fill
-                              className="object-cover rounded"
-                              onMouseDown={(e) => {
-                                if (canUltimateAttack) {
-                                  handleAttackStart(0, e, "ultimate")
-                                } else {
-                                  handleCardPressStart(myField.ultimateZone!)
-                                }
-                              }}
-                              onMouseUp={handleCardPressEnd}
-                              onMouseLeave={handleCardPressEnd}
-                              onTouchStart={(e) => {
-                                if (canUltimateAttack) {
-                                  handleAttackStart(0, e, "ultimate")
-                                } else {
-                                  handleCardPressStart(myField.ultimateZone!)
-                                }
-                              }}
-                              onTouchEnd={handleCardPressEnd}
-                            />
-                            {canUltimateAttack && (
-                              <div className="absolute top-0 left-0 right-0 bg-green-500 text-white text-[10px] text-center font-bold animate-pulse">
-                                {t("dragToAttack")}
-                              </div>
-                            )}
-                            {myField.ultimateZone.type === "ultimateGuardian" && (
-                              <div className="absolute top-0 left-0 right-0 bg-blue-600/90 text-white text-[8px] text-center font-bold">
-                                GUARDIAN
-                              </div>
-                            )}
-                            <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-center text-xs text-white font-bold py-0.5">
-                              {myField.ultimateZone.type === "ultimateGuardian" ? (
-                                <span className="text-blue-300">{myField.ultimateZone.ability || "GUARD"}</span>
-                              ) : (
-                                <>{myField.ultimateZone.currentDp} DP</>
-                              )}
-                            </div>
-                          </>
-                        ) : null}
-                        {!myField.ultimateZone && isDroppingUltimate && (
-                          <span className="text-green-400 text-[10px] font-bold animate-pulse">SOLTAR</span>
-                        )}
-                      </div>
-                      {/* UG Activate Ability Button */}
-                      {myField.ultimateZone && hasActivatableUgAbility() && isMyTurn && phase === "main" && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); activateUgAbility() }}
-                          className="w-14 mt-0.5 px-1 py-0.5 bg-amber-600/90 hover:bg-amber-500 text-white text-[8px] font-bold rounded transition-colors animate-pulse border border-amber-400/60"
-                        >
-                          ATIVAR
-                        </button>
+                  <div className="flex flex-col items-center">
+                    <div
+                      data-player-ultimate-slot
+                      onClick={() => {
+                        const isSelectedUltimate =
+                          selectedHandCard !== null &&
+                          myField.hand[selectedHandCard] &&
+                          isUltimateCard(myField.hand[selectedHandCard]) &&
+                          !myField.ultimateZone
+                        if (isSelectedUltimate && !draggedHandCard) {
+                          placeUltimateCard()
+                        }
+                      }}
+                      className={`w-14 h-20 bg-emerald-900/30 border-2 rounded flex items-center justify-center relative overflow-hidden transition-all duration-200 mx-auto ${
+                        dropTarget?.type === "ultimate"
+                          ? "border-green-400 bg-green-500/60 scale-110 shadow-lg shadow-green-500/50 ring-2 ring-green-400/50 animate-pulse"
+                          : (selectedHandCard !== null && myField.hand[selectedHandCard] && isUltimateCard(myField.hand[selectedHandCard]) && !myField.ultimateZone) || (draggedHandCard && isUltimateCard(draggedHandCard.card) && !myField.ultimateZone)
+                            ? "border-emerald-400 bg-emerald-900/40 cursor-pointer"
+                            : myField.ultimateZone && canUnitAttackNow(myField.ultimateZone)
+                              ? "border-yellow-400 shadow-lg shadow-yellow-500/40"
+                              : "border-emerald-600/40"
+                      }`}
+                    >
+                      {myField.ultimateZone && canUnitAttackNow(myField.ultimateZone) && (
+                        <div className="absolute -inset-1 bg-yellow-400/40 rounded blur-sm animate-pulse -z-10" />
                       )}
-                      </div>
-                    )
-                  })()}
+                      {myField.ultimateZone ? (
+                        <>
+                          <Image
+                            src={myField.ultimateZone.image || "/placeholder.svg"}
+                            alt={myField.ultimateZone.name}
+                            fill
+                            className="object-cover rounded"
+                            onMouseDown={(e) => {
+                              if (canUnitAttackNow(myField.ultimateZone!)) {
+                                handleAttackStart(0, e, "ultimate")
+                              } else {
+                                handleCardPressStart(myField.ultimateZone!)
+                              }
+                            }}
+                            onMouseUp={handleCardPressEnd}
+                            onMouseLeave={handleCardPressEnd}
+                            onTouchStart={(e) => {
+                              if (canUnitAttackNow(myField.ultimateZone!)) {
+                                handleAttackStart(0, e, "ultimate")
+                              } else {
+                                handleCardPressStart(myField.ultimateZone!)
+                              }
+                            }}
+                            onTouchEnd={handleCardPressEnd}
+                          />
+                          {canUnitAttackNow(myField.ultimateZone) && (
+                            <div className="absolute top-0 left-0 right-0 bg-green-500 text-white text-[10px] text-center font-bold animate-pulse">
+                              {t("dragToAttack")}
+                            </div>
+                          )}
+                          {myField.ultimateZone.type === "ultimateGuardian" && (
+                            <div className="absolute top-0 left-0 right-0 bg-blue-600/90 text-white text-[8px] text-center font-bold">
+                              GUARDIAN
+                            </div>
+                          )}
+                          <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-center text-xs text-white font-bold py-0.5">
+                            {myField.ultimateZone.type === "ultimateGuardian" ? (
+                              <span className="text-blue-300">{myField.ultimateZone.ability || "GUARD"}</span>
+                            ) : (
+                              <>{myField.ultimateZone.currentDp} DP</>
+                            )}
+                          </div>
+                        </>
+                      ) : null}
+                      {!myField.ultimateZone && dropTarget?.type === "ultimate" && (
+                        <span className="text-green-400 text-[10px] font-bold animate-pulse">SOLTAR</span>
+                      )}
+                    </div>
+                    {myField.ultimateZone && hasActivatableUgAbility() && isMyTurn && phase === "main" && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); activateUgAbility() }}
+                        className="w-14 mt-0.5 px-1 py-0.5 bg-amber-600/90 hover:bg-amber-500 text-white text-[8px] font-bold rounded transition-colors animate-pulse border border-amber-400/60"
+                      >
+                        ATIVAR
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex flex-col gap-1">
                   <div className="w-14 h-20 bg-blue-700/80 rounded text-sm text-white flex items-center justify-center font-bold border border-blue-500/50">
