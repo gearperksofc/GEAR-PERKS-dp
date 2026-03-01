@@ -3471,7 +3471,7 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
                       </div>
                     )
                   })()}
-                  {/* Player Ultimate Zone - single green slot below scenario */}
+                  {/* Player Ultimate Zone */}
                   {(() => {
                     const isSelectedUltimate =
                       selectedHandCard !== null &&
