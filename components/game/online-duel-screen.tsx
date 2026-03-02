@@ -3428,50 +3428,37 @@ export function OnlineDuelScreen({ roomData, onBack }: OnlineDuelScreenProps) {
               <div className="flex items-start gap-1">
                 <div className="flex flex-col gap-1">
                   {/* Player Scenario Zone - Horizontal slot, aligned with unit zone */}
-                  {(() => {
-                    const isSelectedTarget =
-                      selectedHandCard !== null &&
-                      myField.hand[selectedHandCard]?.type === "scenario" &&
-                      !myField.scenarioZone
-                    const isDragTarget =
-                      draggedHandCard && draggedHandCard.card.type === "scenario" && !myField.scenarioZone
-                    const isDropping = dropTarget?.type === "scenario"
-                    const isValidDropTarget = isSelectedTarget || isDragTarget
-
-                    return (
-                      <div
-                        data-player-scenario-slot
-                        onClick={() => {
-                          if (selectedHandCard !== null && myField.hand[selectedHandCard]?.type === "scenario" && !draggedHandCard) {
-                            placeScenarioCard()
-                          }
-                        }}
-                        className={`h-14 w-20 bg-amber-900/30 border-2 rounded flex items-center justify-center relative overflow-hidden transition-all duration-200 ${
-                          isDropping
-                            ? "border-green-400 bg-green-500/50 scale-110 shadow-lg shadow-green-500/50"
-                            : isValidDropTarget
-                              ? "border-green-500 bg-green-900/40 cursor-pointer"
-                              : "border-amber-600/40"
-                        }`}
-                      >
-                        {myField.scenarioZone ? (
-                          <Image
-                            src={myField.scenarioZone.image || "/placeholder.svg"}
-                            alt={myField.scenarioZone.name}
-                            fill
-                            className="object-cover rounded"
-                            onMouseDown={() => handleCardPressStart(myField.scenarioZone!)}
-                            onMouseUp={handleCardPressEnd}
-                            onMouseLeave={handleCardPressEnd}
-                            onTouchStart={() => handleCardPressStart(myField.scenarioZone!)}
-                            onTouchEnd={handleCardPressEnd}
-                          />
-                        ) : (
-                          <span className="text-amber-500/50 text-[8px] text-center">SCENARIO</span>
-                        )}
-                      </div>
-                    )
-                  })()}
+                  <div
+                    data-player-scenario-slot
+                    onClick={() => {
+                      if (selectedHandCard !== null && myField.hand[selectedHandCard]?.type === "scenario" && !draggedHandCard) {
+                        placeScenarioCard()
+                      }
+                    }}
+                    className={`h-14 w-20 bg-amber-900/30 border-2 rounded flex items-center justify-center relative overflow-hidden transition-all duration-200 ${
+                      dropTarget?.type === "scenario"
+                        ? "border-green-400 bg-green-500/50 scale-110 shadow-lg shadow-green-500/50"
+                        : (selectedHandCard !== null && myField.hand[selectedHandCard]?.type === "scenario" && !myField.scenarioZone) || (draggedHandCard && draggedHandCard.card.type === "scenario" && !myField.scenarioZone)
+                          ? "border-green-500 bg-green-900/40 cursor-pointer"
+                          : "border-amber-600/40"
+                    }`}
+                  >
+                    {myField.scenarioZone ? (
+                      <Image
+                        src={myField.scenarioZone.image || "/placeholder.svg"}
+                        alt={myField.scenarioZone.name}
+                        fill
+                        className="object-cover rounded"
+                        onMouseDown={() => handleCardPressStart(myField.scenarioZone!)}
+                        onMouseUp={handleCardPressEnd}
+                        onMouseLeave={handleCardPressEnd}
+                        onTouchStart={() => handleCardPressStart(myField.scenarioZone!)}
+                        onTouchEnd={handleCardPressEnd}
+                      />
+                    ) : (
+                      <span className="text-amber-500/50 text-[8px] text-center">SCENARIO</span>
+                    )}
+                  </div>
                   {/* Player Ultimate Zone */}
                   <div className="flex flex-col items-center">
                     <div
