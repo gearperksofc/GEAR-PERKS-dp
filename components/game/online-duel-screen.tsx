@@ -1,5 +1,6 @@
 "use client"
 
+// Online Duel Screen - Real-time PvP multiplayer battles
 import type React from "react"
 import { useState, useEffect, useRef, useCallback } from "react"
 import { createClient } from "@/lib/supabase/client"
