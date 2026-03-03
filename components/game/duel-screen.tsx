@@ -1257,13 +1257,15 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
   const [effectFeedback, setEffectFeedback] = useState<{ active: boolean; message: string; type: "success" | "error" } | null>(null)
 
   // Ultimate Gear effect tracking
-  const [playerUgAbilityUsed, setPlayerUgAbilityUsed] = useState(false) // One-time ability used (ODEN SWORD, TWILIGH AVALON)
+  const [playerUgAbilityUsed, setPlayerUgAbilityUsed] = useState(false) // One-time ability used (ODEN SWORD, TWILIGH AVALON, MEFISTO)
   const [enemyUgAbilityUsed, setEnemyUgAbilityUsed] = useState(false)
   const [ugTargetMode, setUgTargetMode] = useState<{
     active: boolean
     ugCard: GameCard | null
-    type: "oden_sword" | "twiligh_avalon" | null
+    type: "oden_sword" | "twiligh_avalon" | "mefisto" | "julgamento_divino" | null
   }>({ active: false, ugCard: null, type: null })
+  // MIGUEL ARCANJO: Julgamento Divino - once per TURN (resets each turn)
+  const [julgamentoDivinoUsedThisTurn, setJulgamentoDivinoUsedThisTurn] = useState(false)
   const [fornbrennaFireCount, setFornbrennaFireCount] = useState(0) // Snapshot of fire units used when Fornbrenna is placed
 
   // Track last known unit zone state to detect when a matching unit is placed after UG
@@ -1299,6 +1301,8 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
           else if (ability === "PROTONIX SWORD") { bonus = 2; msg = `${requiredUnit} +2 DP (Protonix Sword)!` }
           else if (ability === "TWILIGH AVALON") { bonus = 2; msg = `${requiredUnit} +2 DP (Twiligh Avalon)!` }
           else if (ability === "ULLRBOGI") { msg = `${requiredUnit} recebera +3 DP nas fases de batalha (Ullrbogi)!` }
+          else if (ability === "MIGUEL ARCANJO") { bonus = 4; msg = `${requiredUnit} +4 DP! Protecao de Funcoes ativada! (Miguel Arcanjo)` }
+          else if (ability === "MEFISTO") { bonus = 2; msg = `${requiredUnit} +2 DP! (Mefisto Foles)` }
           else if (ability === "FORNBRENNA") {
             const fireCount = countFireUnitsUsed(prev)
             bonus = fireCount * 2
@@ -2988,6 +2992,14 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
           }
           setFornbrennaFireCount(fireCount)
           bonusMsg = `${requiredUnit} +${bonus} DP! (${fireCount} unidades de fogo usadas)`
+        } else if (ability === "MIGUEL ARCANJO") {
+          // +4 DP to Calem Hidenori
+          newUnitZone[unitIdx] = { ...unit, currentDp: unit.currentDp + 4 }
+          bonusMsg = `${requiredUnit} +4 DP! Protecao de Funcoes ativada! (Miguel Arcanjo)`
+        } else if (ability === "MEFISTO") {
+          // +2 DP to Rei Arthur
+          newUnitZone[unitIdx] = { ...unit, currentDp: unit.currentDp + 2 }
+          bonusMsg = `${requiredUnit} +2 DP! (Mefisto Foles)`
         }
       }
 
@@ -3046,73 +3058,162 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
       }
       setUgTargetMode({ active: true, ugCard: ug, type: "twiligh_avalon" })
       showEffectFeedback("Selecione uma carta inimiga para devolver a mao!", "success")
+    } else if (ug.ability === "MEFISTO") {
+      // Once per duel: destroy any 1 card on opponent's field
+      if (playerUgAbilityUsed) return
+      const hasEnemyCards = enemyField.unitZone.some((u) => u !== null) || enemyField.functionZone.some((f) => f !== null)
+      if (!hasEnemyCards) {
+        showEffectFeedback("Oponente nao tem cartas no campo!", "error")
+        return
+      }
+      setUgTargetMode({ active: true, ugCard: ug, type: "mefisto" })
+      showEffectFeedback("MEFISTO FOLES: Selecione 1 carta inimiga para destruir!", "success")
+    } else if (ug.ability === "MIGUEL ARCANJO") {
+      // Julgamento Divino: once per turn, select enemy unit and reduce -1DP
+      if (julgamentoDivinoUsedThisTurn) {
+        showEffectFeedback("Julgamento Divino ja foi usado neste turno!", "error")
+        return
+      }
+      const hasEnemyUnits = enemyField.unitZone.some((u) => u !== null)
+      if (!hasEnemyUnits) {
+        showEffectFeedback("Oponente nao tem Unidades no campo!", "error")
+        return
+      }
+      setUgTargetMode({ active: true, ugCard: ug, type: "julgamento_divino" })
+      showEffectFeedback("JULGAMENTO DIVINO: Selecione uma Unidade inimiga para -1DP!", "success")
     }
   }
 
-  // Handle UG target selection for enemy function cards (ODEN SWORD)
+  // Handle UG target selection for enemy function cards (ODEN SWORD / MEFISTO)
   const handleUgTargetEnemyFunction = (funcIndex: number) => {
-    if (!ugTargetMode.active || ugTargetMode.type !== "oden_sword") return
+    if (!ugTargetMode.active) return
     const funcCard = enemyField.functionZone[funcIndex]
     if (!funcCard) return
 
-    setEnemyField((prev) => {
-      const newFuncs = [...prev.functionZone]
-      const destroyed = newFuncs[funcIndex]
-      newFuncs[funcIndex] = null
-      return {
-        ...prev,
-        functionZone: newFuncs,
-        graveyard: destroyed ? [...prev.graveyard, destroyed] : prev.graveyard,
-      }
-    })
-
-    showEffectFeedback(`ODEN SWORD: ${funcCard.name} destruida!`, "success")
-    setPlayerUgAbilityUsed(true)
-    setUgTargetMode({ active: false, ugCard: null, type: null })
-  }
-
-  // Handle UG target selection for any enemy card (TWILIGH AVALON)
-  const handleUgTargetEnemyCard = (type: "unit" | "function", index: number) => {
-    if (!ugTargetMode.active || ugTargetMode.type !== "twiligh_avalon") return
-
-    if (type === "unit") {
-      const unit = enemyField.unitZone[index]
-      if (!unit) return
-
-      setEnemyField((prev) => {
-        const newUnits = [...prev.unitZone]
-        const returned = newUnits[index]
-        newUnits[index] = null
-        return {
-          ...prev,
-          unitZone: newUnits as (FieldCard | null)[],
-          hand: returned ? [...prev.hand, returned] : prev.hand,
-        }
-      })
-      // If returned card is a unit, deal 3 DP to opponent
-      setEnemyField((prev) => ({
-        ...prev,
-        life: Math.max(0, prev.life - 3),
-      }))
-      showEffectFeedback(`TWILIGH AVALON: ${unit.name} devolvida! -3 LP no oponente!`, "success")
-    } else {
-      const func = enemyField.functionZone[index]
-      if (!func) return
-
+    if (ugTargetMode.type === "oden_sword" || ugTargetMode.type === "mefisto") {
       setEnemyField((prev) => {
         const newFuncs = [...prev.functionZone]
-        const returned = newFuncs[index]
-        newFuncs[index] = null
+        const destroyed = newFuncs[funcIndex]
+        newFuncs[funcIndex] = null
         return {
           ...prev,
           functionZone: newFuncs,
-          hand: returned ? [...prev.hand, returned] : prev.hand,
+          graveyard: destroyed ? [...prev.graveyard, destroyed] : prev.graveyard,
         }
       })
-      showEffectFeedback(`TWILIGH AVALON: ${func.name} devolvida a mao!`, "success")
+      const label = ugTargetMode.type === "mefisto" ? "MEFISTO FOLES" : "ODEN SWORD"
+      showEffectFeedback(`${label}: ${funcCard.name} destruida!`, "success")
+      setPlayerUgAbilityUsed(true)
+      setUgTargetMode({ active: false, ugCard: null, type: null })
     }
+  }
 
-    setPlayerUgAbilityUsed(true)
+  // Handle UG target selection for any enemy card (TWILIGH AVALON / MEFISTO)
+  const handleUgTargetEnemyCard = (type: "unit" | "function", index: number) => {
+    if (!ugTargetMode.active) return
+
+    if (ugTargetMode.type === "twiligh_avalon") {
+      if (type === "unit") {
+        const unit = enemyField.unitZone[index]
+        if (!unit) return
+
+        setEnemyField((prev) => {
+          const newUnits = [...prev.unitZone]
+          const returned = newUnits[index]
+          newUnits[index] = null
+          return {
+            ...prev,
+            unitZone: newUnits as (FieldCard | null)[],
+            hand: returned ? [...prev.hand, returned] : prev.hand,
+          }
+        })
+        // If returned card is a unit, deal 3 DP to opponent
+        setEnemyField((prev) => ({
+          ...prev,
+          life: Math.max(0, prev.life - 3),
+        }))
+        showEffectFeedback(`TWILIGH AVALON: ${unit.name} devolvida! -3 LP no oponente!`, "success")
+      } else {
+        const func = enemyField.functionZone[index]
+        if (!func) return
+
+        setEnemyField((prev) => {
+          const newFuncs = [...prev.functionZone]
+          const returned = newFuncs[index]
+          newFuncs[index] = null
+          return {
+            ...prev,
+            functionZone: newFuncs,
+            hand: returned ? [...prev.hand, returned] : prev.hand,
+          }
+        })
+        showEffectFeedback(`TWILIGH AVALON: ${func.name} devolvida a mao!`, "success")
+      }
+      setPlayerUgAbilityUsed(true)
+      setUgTargetMode({ active: false, ugCard: null, type: null })
+    } else if (ugTargetMode.type === "mefisto") {
+      // MEFISTO: destroy any card on opponent's field
+      if (type === "unit") {
+        const unit = enemyField.unitZone[index]
+        if (!unit) return
+        setEnemyField((prev) => {
+          const newUnits = [...prev.unitZone]
+          const destroyed = newUnits[index]
+          newUnits[index] = null
+          return {
+            ...prev,
+            unitZone: newUnits as (FieldCard | null)[],
+            graveyard: destroyed ? [...prev.graveyard, destroyed] : prev.graveyard,
+          }
+        })
+        showEffectFeedback(`MEFISTO FOLES: ${unit.name} destruida!`, "success")
+      } else {
+        const func = enemyField.functionZone[index]
+        if (!func) return
+        setEnemyField((prev) => {
+          const newFuncs = [...prev.functionZone]
+          const destroyed = newFuncs[index]
+          newFuncs[index] = null
+          return {
+            ...prev,
+            functionZone: newFuncs,
+            graveyard: destroyed ? [...prev.graveyard, destroyed] : prev.graveyard,
+          }
+        })
+        showEffectFeedback(`MEFISTO FOLES: ${func.name} destruida!`, "success")
+      }
+      setPlayerUgAbilityUsed(true)
+      setUgTargetMode({ active: false, ugCard: null, type: null })
+    }
+  }
+
+  // Handle JULGAMENTO DIVINO: select enemy unit and reduce -1DP
+  const handleJulgamentoDivinoTarget = (unitIndex: number) => {
+    if (!ugTargetMode.active || ugTargetMode.type !== "julgamento_divino") return
+    const unit = enemyField.unitZone[unitIndex]
+    if (!unit) return
+
+    setEnemyField((prev) => {
+      const newUnits = [...prev.unitZone]
+      const target = newUnits[unitIndex]
+      if (!target) return prev
+      const newDp = target.currentDp - 1
+      if (newDp <= 0) {
+        // Unit destroyed
+        newUnits[unitIndex] = null
+        showEffectFeedback(`JULGAMENTO DIVINO: ${target.name} destruido! (0 DP)`, "success")
+        return {
+          ...prev,
+          unitZone: newUnits as (FieldCard | null)[],
+          graveyard: [...prev.graveyard, target],
+        }
+      }
+      newUnits[unitIndex] = { ...target, currentDp: newDp }
+      showEffectFeedback(`JULGAMENTO DIVINO: ${target.name} -1 DP! (${newDp} DP restante)`, "success")
+      return { ...prev, unitZone: newUnits as (FieldCard | null)[] }
+    })
+
+    setJulgamentoDivinoUsedThisTurn(true)
     setUgTargetMode({ active: false, ugCard: null, type: null })
   }
 
@@ -3563,6 +3664,8 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
                 if (card.ability === "ODEN SWORD") bonus = 4
                 else if (card.ability === "PROTONIX SWORD") bonus = 2
                 else if (card.ability === "TWILIGH AVALON") bonus = 2
+                else if (card.ability === "MIGUEL ARCANJO") { bonus = 4 }
+                else if (card.ability === "MEFISTO") { bonus = 2 }
                 else if (card.ability === "FORNBRENNA") {
                   // Count fire units in enemy graveyard
                   const fireCount = prev.graveyard.filter((c) => c.element === "Pyrus" && (c.type === "unit")).length
@@ -3660,7 +3763,9 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
             }
           } else if (ug.ability === "TWILIGH AVALON") {
             // Return a player unit to hand and deal 3 damage
-            const unitIdx = playerField.unitZone.findIndex((u) => u !== null)
+            // MIGUEL ARCANJO protection: skip Calem Hidenori
+            const isCalemProtected = playerField.ultimateZone?.ability === "MIGUEL ARCANJO"
+            const unitIdx = playerField.unitZone.findIndex((u) => u !== null && !(isCalemProtected && u.name === "Calem Hidenori"))
             if (unitIdx !== -1) {
               const unit = playerField.unitZone[unitIdx]
               setPlayerField((prev) => {
@@ -3676,6 +3781,32 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
               })
               setEnemyUgAbilityUsed(true)
               showEffectFeedback(`Bot TWILIGH AVALON: ${unit?.name} devolvida! -3 LP!`, "error")
+            }
+          } else if (ug.ability === "MEFISTO") {
+            // Destroy any player card (unit or function) - once per duel
+            // MIGUEL ARCANJO protection: skip Calem Hidenori
+            const isCalemProtected = playerField.ultimateZone?.ability === "MIGUEL ARCANJO"
+            const unitIdx = playerField.unitZone.findIndex((u) => u !== null && !(isCalemProtected && u.name === "Calem Hidenori"))
+            const funcIdx = playerField.functionZone.findIndex((f) => f !== null)
+            const targetIdx = unitIdx !== -1 ? unitIdx : -1
+            if (targetIdx !== -1) {
+              setPlayerField((prev) => {
+                const newUnits = [...prev.unitZone]
+                const destroyed = newUnits[targetIdx]
+                newUnits[targetIdx] = null
+                return { ...prev, unitZone: newUnits as (FieldCard | null)[], graveyard: destroyed ? [...prev.graveyard, destroyed] : prev.graveyard }
+              })
+              setEnemyUgAbilityUsed(true)
+              showEffectFeedback(`Bot MEFISTO FOLES: Unidade destruida!`, "error")
+            } else if (funcIdx !== -1) {
+              setPlayerField((prev) => {
+                const newFuncs = [...prev.functionZone]
+                const destroyed = newFuncs[funcIdx]
+                newFuncs[funcIdx] = null
+                return { ...prev, functionZone: newFuncs, graveyard: destroyed ? [...prev.graveyard, destroyed] : prev.graveyard }
+              })
+              setEnemyUgAbilityUsed(true)
+              showEffectFeedback(`Bot MEFISTO FOLES: Function destruida!`, "error")
             }
           }
           return prevEnemy
@@ -3845,6 +3976,7 @@ const [itemSelectionMode, setItemSelectionMode] = useState<{
       setTurn(nextTurn)
       setIsPlayerTurn(true)
       setPhase("draw")
+      setJulgamentoDivinoUsedThisTurn(false)
 
       setPlayerField((prev) => ({
         ...prev,
@@ -4393,15 +4525,15 @@ const handleAllyUnitSelect = (index: number) => {
                 <div className="flex justify-center items-center gap-1.5">
                   {enemyField.functionZone.map((card, i) => {
                     const isUgTarget = ugTargetMode.active && card && (
-                      ugTargetMode.type === "oden_sword" || ugTargetMode.type === "twiligh_avalon"
+                      ugTargetMode.type === "oden_sword" || ugTargetMode.type === "twiligh_avalon" || ugTargetMode.type === "mefisto"
                     )
                     return (
                       <div
                         key={i}
                         onClick={() => {
-                          if (ugTargetMode.active && ugTargetMode.type === "oden_sword" && card) {
+                          if (ugTargetMode.active && (ugTargetMode.type === "oden_sword" || ugTargetMode.type === "mefisto") && card) {
                             handleUgTargetEnemyFunction(i)
-                          } else if (ugTargetMode.active && ugTargetMode.type === "twiligh_avalon" && card) {
+                          } else if (ugTargetMode.active && (ugTargetMode.type === "twiligh_avalon" || ugTargetMode.type === "mefisto") && card) {
                             handleUgTargetEnemyCard("function", i)
                           }
                         }}
@@ -4431,14 +4563,16 @@ const handleAllyUnitSelect = (index: number) => {
                     key={i}
                     data-enemy-unit={i}
                     onClick={() => {
-                      if (ugTargetMode.active && ugTargetMode.type === "twiligh_avalon" && card) {
+                      if (ugTargetMode.active && (ugTargetMode.type === "twiligh_avalon" || ugTargetMode.type === "mefisto") && card) {
                         handleUgTargetEnemyCard("unit", i)
+                      } else if (ugTargetMode.active && ugTargetMode.type === "julgamento_divino" && card) {
+                        handleJulgamentoDivinoTarget(i)
                       } else if (itemSelectionMode.active && itemSelectionMode.step === "selectEnemy") {
                         handleEnemyUnitSelect(i)
                       }
                     }}
                     className={`w-14 h-20 bg-red-900/30 border-2 rounded relative overflow-hidden transition-all ${
-                      ugTargetMode.active && ugTargetMode.type === "twiligh_avalon" && card
+                      ugTargetMode.active && (ugTargetMode.type === "twiligh_avalon" || ugTargetMode.type === "mefisto" || ugTargetMode.type === "julgamento_divino") && card
                         ? "border-yellow-400 cursor-pointer hover:bg-yellow-900/30 ring-2 ring-yellow-400/50 animate-pulse"
                         : attackTarget?.type === "unit" && attackTarget.index === i
                           ? "border-red-500 ring-2 ring-red-400 scale-105"
@@ -4695,9 +4829,9 @@ const handleAllyUnitSelect = (index: number) => {
                         <div className="absolute bottom-0 left-0 right-0 bg-black/80 text-center text-xs text-white font-bold py-0.5">
                           {playerField.ultimateZone.currentDp} DP
                         </div>
-                        {/* Activate button for one-time abilities (ODEN SWORD, TWILIGH AVALON) */}
+                        {/* Activate button for one-time abilities (ODEN SWORD, TWILIGH AVALON, MEFISTO) */}
                         {isPlayerTurn && phase === "main" && !playerUgAbilityUsed && !ugTargetMode.active &&
-                          (playerField.ultimateZone.ability === "ODEN SWORD" || playerField.ultimateZone.ability === "TWILIGH AVALON") &&
+                          (playerField.ultimateZone.ability === "ODEN SWORD" || playerField.ultimateZone.ability === "TWILIGH AVALON" || playerField.ultimateZone.ability === "MEFISTO") &&
                           playerField.ultimateZone.requiresUnit &&
                           findUnitByName(playerField.unitZone, playerField.ultimateZone.requiresUnit) !== -1 && (
                           <button
@@ -4705,6 +4839,18 @@ const handleAllyUnitSelect = (index: number) => {
                             className="absolute -top-5 left-1/2 -translate-x-1/2 bg-yellow-500 hover:bg-yellow-400 text-black text-[7px] font-bold px-1.5 py-0.5 rounded shadow-lg shadow-yellow-500/50 animate-pulse whitespace-nowrap z-10"
                           >
                             ATIVAR
+                          </button>
+                        )}
+                        {/* Activate button for Julgamento Divino (MIGUEL ARCANJO - once per turn) */}
+                        {isPlayerTurn && phase === "main" && !julgamentoDivinoUsedThisTurn && !ugTargetMode.active &&
+                          playerField.ultimateZone.ability === "MIGUEL ARCANJO" &&
+                          playerField.ultimateZone.requiresUnit &&
+                          findUnitByName(playerField.unitZone, playerField.ultimateZone.requiresUnit) !== -1 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); activateUgAbility() }}
+                            className="absolute -top-8 left-1/2 -translate-x-1/2 bg-purple-600 hover:bg-purple-500 text-white text-[7px] font-bold px-1.5 py-0.5 rounded shadow-lg shadow-purple-500/50 animate-pulse whitespace-nowrap z-10"
+                          >
+                            JULGAMENTO
                           </button>
                         )}
                       </>
@@ -5253,11 +5399,18 @@ const handleAllyUnitSelect = (index: number) => {
         {ugTargetMode.active && (
           <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-black/90 border border-yellow-500/50 rounded-xl px-4 py-3 text-center">
             <h3 className="text-yellow-400 font-bold text-sm mb-1">
-              {ugTargetMode.type === "oden_sword" ? "ODEN SWORD" : "TWILIGH AVALON"}
+              {ugTargetMode.type === "oden_sword" ? "ODEN SWORD"
+                : ugTargetMode.type === "twiligh_avalon" ? "TWILIGH AVALON"
+                : ugTargetMode.type === "mefisto" ? "MEFISTO FÓLES"
+                : "JULGAMENTO DIVINO"}
             </h3>
             <p className="text-yellow-200/80 text-xs mb-2">
               {ugTargetMode.type === "oden_sword"
                 ? "Selecione uma Function inimiga para destruir"
+                : ugTargetMode.type === "mefisto"
+                ? "Selecione 1 carta inimiga para destruir"
+                : ugTargetMode.type === "julgamento_divino"
+                ? "Selecione uma Unidade inimiga para -1DP"
                 : "Selecione uma carta inimiga para devolver a mao"
               }
             </p>
