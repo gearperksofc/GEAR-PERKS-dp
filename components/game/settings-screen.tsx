@@ -457,55 +457,6 @@ export default function SettingsScreen({ onBack }: SettingsScreenProps) {
   </p>
   )}
   
-  {/* Delete Account Section */}
-  <div className="mt-4 pt-4 border-t border-red-500/20">
-    {!showDeleteConfirm ? (
-      <Button
-        onClick={() => setShowDeleteConfirm(true)}
-        variant="outline"
-        className="w-full border-red-500/30 text-red-400 hover:bg-red-500/10 bg-transparent"
-      >
-        <Trash2 className="w-4 h-4 mr-2" />
-        Deletar Dados da Conta
-      </Button>
-    ) : (
-      <div className="bg-red-500/10 rounded-xl p-4 border border-red-500/30 space-y-3">
-        <div className="flex items-center gap-2 text-red-400">
-          <AlertTriangle className="w-5 h-5" />
-          <span className="font-bold">Confirmar Exclusao</span>
-        </div>
-        <p className="text-slate-300 text-sm">
-          Tem certeza que deseja deletar todos os dados da sua conta? Esta acao ira apagar:
-        </p>
-        <ul className="text-slate-400 text-xs space-y-1 ml-4">
-          <li>- Todas as suas cartas</li>
-          <li>- Todos os seus decks</li>
-          <li>- Historico de partidas</li>
-          <li>- Moedas e progresso</li>
-          <li>- Codigos resgatados</li>
-        </ul>
-        <p className="text-amber-400 text-xs">
-          Voce continuara logado, mas com uma conta zerada.
-        </p>
-        <div className="flex gap-2">
-          <Button
-            onClick={() => setShowDeleteConfirm(false)}
-            variant="outline"
-            className="flex-1 border-slate-500/50 text-slate-300 hover:bg-slate-700 bg-transparent"
-          >
-            Cancelar
-          </Button>
-          <Button
-            onClick={handleDeleteAccount}
-            disabled={deleteLoading}
-            className="flex-1 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 border border-red-400/50"
-          >
-            {deleteLoading ? "Deletando..." : "Sim, Deletar Tudo"}
-          </Button>
-        </div>
-      </div>
-    )}
-  </div>
   </div>
   ) : generatedCode ? (
                   /* Show generated code after registration */
@@ -746,6 +697,80 @@ export default function SettingsScreen({ onBack }: SettingsScreenProps) {
                         </>
                       )}
                     </Button>
+                  </div>
+                )}
+              </div>
+
+              {/* Delete Data Section - always visible */}
+              <div className="bg-gradient-to-r from-red-950/60 to-rose-950/60 rounded-2xl p-6 border border-red-500/40 backdrop-blur-sm">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-red-600 to-rose-700 flex items-center justify-center shadow-lg shadow-red-900/40">
+                    <Trash2 className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Delete Data</h2>
+                    <p className="text-red-300/70 text-xs">Apaga todos os dados do jogo</p>
+                  </div>
+                </div>
+
+                <div className="bg-black/30 rounded-xl p-4 border border-red-500/15 mb-4">
+                  <p className="text-slate-300 text-sm leading-relaxed">
+                    Apaga permanentemente todos os seus dados de jogo — cartas, decks, moedas, histórico e progresso — mas mantém sua conta logada pelo email/código.
+                  </p>
+                </div>
+
+                {!showDeleteConfirm ? (
+                  <Button
+                    onClick={() => setShowDeleteConfirm(true)}
+                    className="w-full py-4 bg-gradient-to-r from-red-700 to-rose-700 hover:from-red-600 hover:to-rose-600 border border-red-500/50 text-white font-bold text-base shadow-lg shadow-red-900/30 transition-all"
+                  >
+                    <Trash2 className="w-5 h-5 mr-2" />
+                    Deletar Todos os Dados
+                  </Button>
+                ) : (
+                  <div className="bg-red-500/10 rounded-xl p-4 border border-red-500/40 space-y-3 animate-fadeIn">
+                    <div className="flex items-center gap-2 text-red-400">
+                      <AlertTriangle className="w-5 h-5" />
+                      <span className="font-bold text-base">Confirmar Exclusão</span>
+                    </div>
+                    <p className="text-slate-300 text-sm">
+                      Esta ação <span className="text-red-400 font-semibold">não pode ser desfeita</span>. Serão apagados:
+                    </p>
+                    <div className="grid grid-cols-2 gap-1.5 text-xs text-slate-400">
+                      <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Todas as cartas</span>
+                      <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Todos os decks</span>
+                      <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Histórico de partidas</span>
+                      <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Moedas e progresso</span>
+                      <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Códigos resgatados</span>
+                      <span className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />Playmats obtidos</span>
+                    </div>
+                    <div className="flex items-center gap-2 bg-amber-500/10 rounded-lg px-3 py-2 border border-amber-500/20">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <p className="text-amber-300 text-xs">
+                        Sua conta permanecerá logada com o email/código atual.
+                      </p>
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <Button
+                        onClick={() => setShowDeleteConfirm(false)}
+                        variant="outline"
+                        className="flex-1 border-slate-600/80 text-slate-300 hover:bg-slate-700 bg-transparent"
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        onClick={handleDeleteAccount}
+                        disabled={deleteLoading}
+                        className="flex-1 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 border border-red-400/50 font-bold"
+                      >
+                        {deleteLoading ? (
+                          <div className="flex items-center gap-2">
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            Deletando...
+                          </div>
+                        ) : "Sim, Deletar Tudo"}
+                      </Button>
+                    </div>
                   </div>
                 )}
               </div>
