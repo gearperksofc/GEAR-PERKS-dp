@@ -814,7 +814,7 @@ const ALL_CARDS: Card[] = [
   {
     id: "miguel-arcanjo",
     name: "Ultimate Guardian: Miguel Arcanjo",
-    image: "/images/miguel-arcanjo.png",
+    image: "/images/cards/miguel-arcanjo.png",
     rarity: "UR",
     type: "ultimateGear",
     element: "Haos",
@@ -828,7 +828,7 @@ const ALL_CARDS: Card[] = [
   {
     id: "mefisto-foles",
     name: "Ultimate Guardian: Mefisto Fóles",
-    image: "/images/mefisto-foles.png",
+    image: "/images/cards/mefisto-foles.png",
     rarity: "UR",
     type: "ultimateGear",
     element: "Darkus",
