@@ -11,6 +11,7 @@ import DuelScreen from "./duel-screen"
 import HistoryScreen from "./history-screen"
 import SettingsScreen from "./settings-screen"
 import FriendsScreen from "./friends-screen"
+import TitleScreen from "./title-screen"
 
 export type GameScreen =
   | "menu"
@@ -32,6 +33,7 @@ export function GameWrapper() {
   const [showSetup, setShowSetup] = useState(false)
   const [isLoaded, setIsLoaded] = useState(false)
   const [menuMessage, setMenuMessage] = useState<string | null>(null)
+  const [showTitle, setShowTitle] = useState(true)
 
   // Toggle mobile-mode class on html element
   useEffect(() => {
@@ -70,6 +72,11 @@ export function GameWrapper() {
 
   const handleSetupComplete = () => {
     setShowSetup(false)
+  }
+
+  // Show title screen first
+  if (showTitle) {
+    return <TitleScreen onEnter={() => setShowTitle(false)} />
   }
 
   // Show loading state briefly
